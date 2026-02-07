@@ -67,7 +67,7 @@ impl Transaction {
             amount: 0,
             fee: 0,
             nonce: 0,
-            data: b"Budlum Genesis Block".to_vec(),
+            data: hex::decode("52414445").unwrap(),
             timestamp: 0,
             hash: "genesis".to_string(),
             signature: None,
