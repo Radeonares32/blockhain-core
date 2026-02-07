@@ -1,4 +1,3 @@
-
 use crate::network::protocol::NetworkMessage;
 use libp2p::{
     futures::StreamExt,
@@ -15,7 +14,6 @@ use std::error::Error;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 use tracing::{info, warn};
-
 #[derive(NetworkBehaviour)]
 pub struct BudlumBehaviour {
     ping: ping::Behaviour,
@@ -24,46 +22,39 @@ pub struct BudlumBehaviour {
     gossipsub: gossipsub::Behaviour,
     kad: Kademlia<MemoryStore>,
 }
-
-use tokio::sync::mpsc;
-
 use crate::Block;
 use crate::Blockchain;
 use std::sync::{Arc, Mutex};
-
+use tokio::sync::mpsc;
 pub enum NodeCommand {
     Subscribe(String),
     Broadcast(String, NetworkMessage),
     ListPeers,
 }
-
 #[derive(Clone)]
 pub struct NodeClient {
     sender: mpsc::Sender<NodeCommand>,
     pub peer_id: PeerId,
 }
-
 impl NodeClient {
     pub async fn subscribe(&self, topic: String) {
         let _ = self.sender.send(NodeCommand::Subscribe(topic)).await;
     }
-
     pub async fn broadcast(&self, topic: String, msg: NetworkMessage) {
         let _ = self.sender.send(NodeCommand::Broadcast(topic, msg)).await;
     }
-
     pub async fn list_peers(&self) {
         let _ = self.sender.send(NodeCommand::ListPeers).await;
     }
 }
-
 #[tokio::test]
 async fn test_node_creation() {
-    let blockchain = Arc::new(Mutex::new(Blockchain::new(2, None)));
+    use crate::consensus::PoWEngine;
+    let consensus = std::sync::Arc::new(PoWEngine::new(2));
+    let blockchain = Arc::new(Mutex::new(Blockchain::new(consensus, None)));
     let node = Node::new(blockchain);
     assert!(node.is_ok());
 }
-
 pub struct Node {
     swarm: Swarm<BudlumBehaviour>,
     command_rx: mpsc::Receiver<NodeCommand>,
@@ -71,32 +62,26 @@ pub struct Node {
     pub peer_id: PeerId,
     pub blockchain: Arc<Mutex<Blockchain>>,
 }
-
 impl Node {
     pub fn new(blockchain: Arc<Mutex<Blockchain>>) -> Result<Self, Box<dyn Error>> {
         let local_key = identity::Keypair::generate_ed25519();
         let peer_id = PeerId::from(local_key.public());
-
         info!("🔑 Node ID: {}", peer_id);
-
         let message_id_fn = |message: &gossipsub::Message| {
             let mut s = DefaultHasher::new();
             message.data.hash(&mut s);
             gossipsub::MessageId::from(s.finish().to_string())
         };
-
         let gossipsub_config = gossipsub::ConfigBuilder::default()
             .heartbeat_interval(Duration::from_secs(10))
             .validation_mode(gossipsub::ValidationMode::Strict)
             .message_id_fn(message_id_fn)
             .build()
             .map_err(|msg| std::io::Error::new(std::io::ErrorKind::Other, msg))?;
-
         let gossipsub = gossipsub::Behaviour::new(
             gossipsub::MessageAuthenticity::Signed(local_key.clone()),
             gossipsub_config,
         )?;
-
         let swarm = libp2p::SwarmBuilder::with_existing_identity(local_key)
             .with_tokio()
             .with_tcp(
@@ -109,17 +94,14 @@ impl Node {
                     mdns::Config::default(),
                     key.public().to_peer_id(),
                 )?;
-
                 let kad_store = MemoryStore::new(key.public().to_peer_id());
                 let kad_config = KademliaConfig::default();
                 let kademlia =
                     Kademlia::with_config(key.public().to_peer_id(), kad_store, kad_config);
-
                 let identify = identify::Behaviour::new(identify::Config::new(
                     "/budlum/1.0.0".to_string(),
                     key.public(),
                 ));
-
                 Ok(BudlumBehaviour {
                     ping: ping::Behaviour::new(
                         ping::Config::new().with_interval(Duration::from_secs(15)),
@@ -132,9 +114,7 @@ impl Node {
             })?
             .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60)))
             .build();
-
         let (command_tx, command_rx) = mpsc::channel(32);
-
         Ok(Node {
             swarm,
             peer_id,
@@ -143,31 +123,26 @@ impl Node {
             blockchain,
         })
     }
-
     pub fn get_client(&self) -> NodeClient {
         NodeClient {
             sender: self.command_tx.clone(),
             peer_id: self.peer_id,
         }
     }
-
     pub fn listen(&mut self, port: u16) -> Result<(), Box<dyn Error>> {
         let addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
         self.swarm.listen_on(addr)?;
         info!("👂 Listening on port {}", port);
         Ok(())
     }
-
     pub fn dial(&mut self, addr: &str) -> Result<(), Box<dyn Error>> {
         let remote: Multiaddr = addr.parse()?;
         self.swarm.dial(remote)?;
         info!("📞 Dialing {}", addr);
         Ok(())
     }
-
     pub fn bootstrap(&mut self, addr: &str) -> Result<(), Box<dyn Error>> {
         let multiaddr: Multiaddr = addr.parse()?;
-
         let peer_id = match multiaddr
             .iter()
             .find(|p| matches!(p, libp2p::multiaddr::Protocol::P2p(_)))
@@ -175,7 +150,6 @@ impl Node {
             Some(libp2p::multiaddr::Protocol::P2p(peer_id)) => peer_id,
             _ => return Err("Bootstrap address must contain /p2p/<ID>".into()),
         };
-
         info!("👢 Bootstrapping via {}", addr);
         self.swarm
             .behaviour_mut()
@@ -184,10 +158,8 @@ impl Node {
         self.swarm.behaviour_mut().kad.bootstrap()?;
         Ok(())
     }
-
     pub async fn run(&mut self) {
         info!("🚀 Node running...");
-
         loop {
             tokio::select! {
                 cmd = self.command_rx.recv() => {
@@ -230,7 +202,7 @@ impl Node {
                             let chain = self.blockchain.lock().unwrap();
                             info!("DEBUG: Connected to {}, Chain length: {}", peer_id, chain.chain.len());
                             if chain.chain.len() == 1 {
-                                drop(chain); // Mutex kilidini bırak
+                                drop(chain);
                                 info!("🔌 New connection, requesting blocks...");
                                 let topic = gossipsub::IdentTopic::new("blocks");
                                 let msg = NetworkMessage::GetBlocks;
@@ -288,7 +260,6 @@ impl Node {
                                         info!("📥 Received GetBlocks request from {}", peer_id);
                                         let chain = self.blockchain.lock().unwrap();
                                         let blocks = chain.chain.clone();
-
                                         let response = NetworkMessage::Chain(blocks);
                                         let topic = gossipsub::IdentTopic::new("blocks");
                                         let data = response.to_bytes();

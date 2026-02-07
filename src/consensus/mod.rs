@@ -1,0 +1,128 @@
+mod poa;
+mod pos;
+mod pow;
+use crate::Block;
+pub use poa::PoAEngine;
+pub use pos::PoSEngine;
+pub use pow::PoWEngine;
+use std::error::Error;
+use std::fmt;
+use std::time::{SystemTime, UNIX_EPOCH};
+#[derive(Debug)]
+pub struct ConsensusError(pub String);
+impl fmt::Display for ConsensusError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Consensus error: {}", self.0)
+    }
+}
+impl Error for ConsensusError {}
+pub const MAX_FUTURE_BLOCK_TIME_MS: u128 = 15 * 60 * 1000;
+pub const MIN_BLOCK_INTERVAL_MS: u128 = 1000;
+pub const MAX_BLOCK_SIZE: usize = 1_000_000;
+pub const MAX_TRANSACTIONS_PER_BLOCK: usize = 5000;
+pub const MAX_REORG_DEPTH: usize = 100;
+pub trait ConsensusEngine: Send + Sync {
+    fn prepare_block(&self, block: &mut Block) -> Result<(), ConsensusError>;
+    fn validate_block(&self, block: &Block, chain: &[Block]) -> Result<(), ConsensusError>;
+    fn consensus_type(&self) -> &'static str;
+    fn info(&self) -> String;
+    fn validate_timestamp(
+        &self,
+        block: &Block,
+        prev_block: Option<&Block>,
+    ) -> Result<(), ConsensusError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let max_allowed_time = now + MAX_FUTURE_BLOCK_TIME_MS;
+        if block.timestamp > max_allowed_time {
+            return Err(ConsensusError(format!(
+                "Block timestamp too far in future. Max: {}, Got: {} (diff: {} ms)",
+                max_allowed_time,
+                block.timestamp,
+                block.timestamp - now
+            )));
+        }
+        if let Some(prev) = prev_block {
+            if block.timestamp <= prev.timestamp {
+                return Err(ConsensusError(format!(
+                    "Block timestamp not monotonic. Prev: {}, Current: {}",
+                    prev.timestamp, block.timestamp
+                )));
+            }
+            let interval = block.timestamp - prev.timestamp;
+            if interval < MIN_BLOCK_INTERVAL_MS {
+                return Err(ConsensusError(format!(
+                    "Block produced too fast. Min interval: {} ms, Got: {} ms",
+                    MIN_BLOCK_INTERVAL_MS, interval
+                )));
+            }
+        }
+        Ok(())
+    }
+    fn validate_block_size(&self, block: &Block) -> Result<(), ConsensusError> {
+        if block.transactions.len() > MAX_TRANSACTIONS_PER_BLOCK {
+            return Err(ConsensusError(format!(
+                "Too many transactions. Max: {}, Got: {}",
+                MAX_TRANSACTIONS_PER_BLOCK,
+                block.transactions.len()
+            )));
+        }
+        let serialized = serde_json::to_vec(block).unwrap_or_default();
+        if serialized.len() > MAX_BLOCK_SIZE {
+            return Err(ConsensusError(format!(
+                "Block too large. Max: {} bytes, Got: {} bytes",
+                MAX_BLOCK_SIZE,
+                serialized.len()
+            )));
+        }
+        Ok(())
+    }
+    fn select_best_chain<'a>(&self, chains: &[&'a [Block]]) -> Option<&'a [Block]> {
+        if chains.is_empty() {
+            return None;
+        }
+        chains.iter().max_by_key(|c| c.len()).copied()
+    }
+    fn can_reorg(&self, current_chain: &[Block], new_chain: &[Block]) -> bool {
+        if new_chain.len() <= current_chain.len() {
+            return false;
+        }
+        let common_ancestor = current_chain
+            .iter()
+            .rev()
+            .find(|b| new_chain.iter().any(|nb| nb.hash == b.hash));
+        if let Some(ancestor) = common_ancestor {
+            let reorg_depth = current_chain.len() - ancestor.index as usize - 1;
+            if reorg_depth > MAX_REORG_DEPTH {
+                println!(
+                    "⚠️  Rejecting deep reorg: {} blocks (max: {})",
+                    reorg_depth, MAX_REORG_DEPTH
+                );
+                return false;
+            }
+        }
+        true
+    }
+    fn full_validate(&self, block: &Block, chain: &[Block]) -> Result<(), ConsensusError> {
+        if block.index == 0 {
+            return self.validate_block(block, chain);
+        }
+        let prev_block = chain.last();
+        self.validate_timestamp(block, prev_block)?;
+        self.validate_block_size(block)?;
+        self.validate_block(block, chain)?;
+        Ok(())
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_constants() {
+        assert_eq!(MAX_FUTURE_BLOCK_TIME_MS, 900_000);
+        assert_eq!(MIN_BLOCK_INTERVAL_MS, 1000);
+        assert_eq!(MAX_REORG_DEPTH, 100);
+    }
+}
