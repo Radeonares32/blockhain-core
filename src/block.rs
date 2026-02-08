@@ -2,6 +2,11 @@ use crate::crypto::{verify_signature, KeyPair};
 use crate::hash::hash_fields;
 use crate::transaction::Transaction;
 use serde::{Deserialize, Serialize};
+
+pub const DEFAULT_CHAIN_ID: u64 = 1337;
+
+use crate::consensus::pos::SlashingEvidence;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Block {
     pub index: u64,
@@ -13,9 +18,19 @@ pub struct Block {
     pub producer: Option<String>,
     pub signature: Option<Vec<u8>>,
     pub stake_proof: Option<Vec<u8>>,
+    pub chain_id: u64,
+    pub slashing_evidence: Option<Vec<SlashingEvidence>>,
 }
 impl Block {
     pub fn new(index: u64, previous_hash: String, transactions: Vec<Transaction>) -> Self {
+        Self::new_with_chain_id(index, previous_hash, transactions, DEFAULT_CHAIN_ID)
+    }
+    pub fn new_with_chain_id(
+        index: u64,
+        previous_hash: String,
+        transactions: Vec<Transaction>,
+        chain_id: u64,
+    ) -> Self {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -30,6 +45,8 @@ impl Block {
             producer: None,
             signature: None,
             stake_proof: None,
+            chain_id,
+            slashing_evidence: None,
         };
         block.hash = block.calculate_hash();
         block
@@ -48,13 +65,22 @@ impl Block {
             .as_ref()
             .map(|p| p.as_bytes().to_vec())
             .unwrap_or_default();
+        let evidence_bytes = self
+            .slashing_evidence
+            .as_ref()
+            .map(|e| serde_json::to_vec(e).unwrap_or_default())
+            .unwrap_or_default();
+
         hash_fields(&[
+            b"BDLM_BLOCK_V1",
             &self.index.to_le_bytes(),
             &self.timestamp.to_le_bytes(),
             self.previous_hash.as_bytes(),
             &tx_data,
             &self.nonce.to_le_bytes(),
             &producer_bytes,
+            &evidence_bytes,
+            &self.chain_id.to_le_bytes(),
         ])
     }
     pub fn sign(&mut self, keypair: &KeyPair) {
@@ -68,40 +94,7 @@ impl Block {
             &self.producer.as_ref().unwrap()[..16]
         );
     }
-    pub fn sign_with_producer(&mut self, producer_address: &str) {
-        use sha3::{Digest, Sha3_256};
-        self.producer = Some(producer_address.to_string());
-        self.hash = self.calculate_hash();
-        let mut hasher = Sha3_256::new();
-        hasher.update(producer_address.as_bytes());
-        hasher.update(self.hash.as_bytes());
-        self.signature = Some(hasher.finalize().to_vec());
-        let display_len = producer_address.len().min(16);
-        println!(
-            "Block {} signed by {}...",
-            self.index,
-            &producer_address[..display_len]
-        );
-    }
-    pub fn verify_producer_signature(&self, expected_producer: &str) -> bool {
-        use sha3::{Digest, Sha3_256};
-        let producer = match &self.producer {
-            Some(p) => p,
-            None => return false,
-        };
-        if producer != expected_producer {
-            return false;
-        }
-        let signature = match &self.signature {
-            Some(s) => s,
-            None => return false,
-        };
-        let mut hasher = Sha3_256::new();
-        hasher.update(producer.as_bytes());
-        hasher.update(self.hash.as_bytes());
-        let expected_sig = hasher.finalize().to_vec();
-        signature == &expected_sig
-    }
+
     pub fn verify_signature(&self) -> bool {
         let producer_hex = match &self.producer {
             Some(p) => p,

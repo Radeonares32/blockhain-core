@@ -6,8 +6,12 @@ mod consensus;
 mod crypto;
 mod hash;
 mod network;
+mod snapshot;
 mod storage;
 mod transaction;
+
+#[cfg(test)]
+mod integration_tests;
 use block::Block;
 use blockchain::Blockchain;
 use clap::Parser;
@@ -40,7 +44,7 @@ async fn main() {
         }
         ConsensusType::PoS => {
             println!("🥩 PoS mode - min stake: {}", config.min_stake);
-            Arc::new(PoSEngine::new(config.min_stake))
+            Arc::new(PoSEngine::new(config.min_stake, None))
         }
         ConsensusType::PoA => {
             println!("👥 PoA mode");
@@ -49,7 +53,8 @@ async fn main() {
                 println!("⚠️  No validators configured. Create validators.json with:");
                 println!("    {{ \"validators\": [\"addr1\", \"addr2\"] }}");
             }
-            Arc::new(PoAEngine::new(validators))
+
+            Arc::new(PoAEngine::new(validators, None))
         }
     };
     let storage = match storage::Storage::new(&config.db_path) {
@@ -59,7 +64,15 @@ async fn main() {
             None
         }
     };
-    let blockchain = Arc::new(Mutex::new(Blockchain::new(consensus, storage)));
+
+    let pruning_manager = snapshot::PruningManager::new(1000, 100, "./data/snapshots".to_string());
+
+    let blockchain = Arc::new(Mutex::new(Blockchain::new(
+        consensus,
+        storage,
+        config.chain_id,
+        Some(pruning_manager),
+    )));
     let mut node = Node::new(blockchain.clone()).unwrap();
     if let Some(ref addr) = config.bootstrap {
         if let Err(e) = node.bootstrap(addr) {

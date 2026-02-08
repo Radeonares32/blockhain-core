@@ -1,6 +1,5 @@
 use super::{ConsensusEngine, ConsensusError};
 use crate::Block;
-use sha3::{Digest, Sha3_256};
 use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct PoAConfig {
@@ -38,19 +37,79 @@ impl Authority {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq)]
+use crate::crypto::{verify_signature, KeyPair};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum VoteType {
     Add,
     Remove,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Vote {
+    pub voter: String,
+    pub target: String,
+    pub vote_type: VoteType,
+    pub signature: Vec<u8>,
+}
+
+impl Vote {
+    pub fn new(voter: String, target: String, vote_type: VoteType) -> Self {
+        Vote {
+            voter,
+            target,
+            vote_type,
+            signature: Vec::new(),
+        }
+    }
+
+    pub fn sign(&mut self, keypair: &KeyPair) {
+        let msg = self.signing_bytes();
+        let sig = keypair.sign(&msg);
+        self.signature = sig.to_vec();
+    }
+
+    pub fn verify(&self) -> bool {
+        if self.signature.is_empty() {
+            return false;
+        }
+
+        let public_key_bytes = match hex::decode(&self.voter) {
+            Ok(bytes) => {
+                if bytes.len() != 32 {
+                    return false;
+                }
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&bytes);
+                arr
+            }
+            Err(_) => return false,
+        };
+        verify_signature(&self.signing_bytes(), &self.signature, &public_key_bytes).is_ok()
+    }
+
+    fn signing_bytes(&self) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(self.voter.as_bytes());
+        data.extend_from_slice(self.target.as_bytes());
+        match self.vote_type {
+            VoteType::Add => data.push(0),
+            VoteType::Remove => data.push(1),
+        }
+        data
+    }
+}
+
 pub struct PoAEngine {
     pub config: PoAConfig,
     pub authorities: Vec<Authority>,
     pub pending_votes: HashMap<String, Vec<(String, VoteType)>>,
     last_producer: Option<String>,
+    keypair: Option<KeyPair>,
 }
 impl PoAEngine {
-    pub fn new(validators: Vec<String>) -> Self {
+    pub fn new(validators: Vec<String>, keypair: Option<KeyPair>) -> Self {
         let authorities = validators
             .into_iter()
             .map(|addr| Authority::new(addr))
@@ -60,13 +119,19 @@ impl PoAEngine {
             authorities,
             pending_votes: HashMap::new(),
             last_producer: None,
+            keypair,
         }
     }
-    pub fn with_config(config: PoAConfig, validators: Vec<String>) -> Self {
-        let mut engine = Self::new(validators);
+    pub fn with_config(
+        config: PoAConfig,
+        validators: Vec<String>,
+        keypair: Option<KeyPair>,
+    ) -> Self {
+        let mut engine = Self::new(validators, keypair);
         engine.config = config;
         engine
     }
+
     pub fn add_authority(&mut self, address: String) {
         if !self.authorities.iter().any(|a| a.address == address) {
             println!("👥 Authority added: {}", address);
@@ -91,16 +156,20 @@ impl PoAEngine {
         self.expected_proposer(block_index)
             .map_or(false, |p| p.address == address)
     }
-    pub fn vote(
-        &mut self,
-        voter: &str,
-        target: String,
-        vote_type: VoteType,
-    ) -> Result<bool, ConsensusError> {
+
+    pub fn vote(&mut self, vote: Vote) -> Result<bool, ConsensusError> {
+        if !vote.verify() {
+            return Err(ConsensusError("Invalid vote signature".into()));
+        }
+
+        let voter = &vote.voter;
+        let target = vote.target.clone();
+        let vote_type = vote.vote_type;
+
         if !self
             .authorities
             .iter()
-            .any(|a| a.address == voter && a.active)
+            .any(|a| a.address == *voter && a.active)
         {
             return Err(ConsensusError("Only validators can vote".into()));
         }
@@ -130,16 +199,7 @@ impl PoAEngine {
         }
         Ok(false)
     }
-    fn create_signature(&self, signer: &str, block: &Block) -> Vec<u8> {
-        let mut hasher = Sha3_256::new();
-        hasher.update(signer.as_bytes());
-        hasher.update(block.hash.as_bytes());
-        hasher.update(block.index.to_le_bytes());
-        hasher.finalize().to_vec()
-    }
-    fn verify_signature(&self, _signer: &str, _block: &Block, _signature: &[u8]) -> bool {
-        true
-    }
+
     pub fn active_validator_count(&self) -> usize {
         self.authorities.iter().filter(|a| a.active).count()
     }
@@ -155,27 +215,47 @@ impl PoAEngine {
 impl ConsensusEngine for PoAEngine {
     fn prepare_block(&self, block: &mut Block) -> Result<(), ConsensusError> {
         let slot = block.index;
-        let expected_signer = if let Some(expected) = self.expected_proposer(slot) {
-            println!(
-                "👥 PoA: Block {} should be proposed by: {}",
-                slot, expected.address
-            );
-            Some(expected.address.clone())
+        let expected_signer_addr = if let Some(expected) = self.expected_proposer(slot) {
+            expected.address.clone()
         } else if self.authorities.is_empty() {
-            println!("⚠️  PoA: No validators configured, allowing block production");
-            None
+            String::new()
         } else {
             return Err(ConsensusError("No valid proposer for this slot".into()));
         };
-        if let Some(signer) = expected_signer {
-            block.sign_with_producer(&signer);
-            println!("✍️  PoA: Block {} signed by {}", block.index, signer);
-        } else {
+
+        if !expected_signer_addr.is_empty() {
+            println!(
+                "👥 PoA: Block {} should be proposed by: {}",
+                slot, expected_signer_addr
+            );
+
+            if let Some(keypair) = &self.keypair {
+                if keypair.public_key_hex() == expected_signer_addr {
+                    block.sign(keypair);
+                    println!(
+                        "✍️  PoA: Block {} signed by us ({})",
+                        block.index, expected_signer_addr
+                    );
+                } else {
+                    println!(
+                        "⚠️  PoA: We are notably the proposer (us: {}, expected: {})",
+                        keypair.public_key_hex(),
+                        expected_signer_addr
+                    );
+                }
+            } else {
+                println!("⚠️  PoA: No keypair configured, cannot sign block");
+            }
+        }
+
+        if block.signature.is_none() {
             block.hash = block.calculate_hash();
         }
+
         println!("👥 PoA: Block {} prepared", block.index);
         Ok(())
     }
+
     fn validate_block(&self, block: &Block, chain: &[Block]) -> Result<(), ConsensusError> {
         if block.index == 0 {
             if block.hash != block.calculate_hash() {
@@ -199,15 +279,18 @@ impl ConsensusEngine for PoAEngine {
                 .producer
                 .as_ref()
                 .ok_or_else(|| ConsensusError("Block has no producer".into()))?;
+
             if producer != &expected.address {
                 return Err(ConsensusError(format!(
                     "Wrong proposer. Expected: {}, Got: {}",
                     expected.address, producer
                 )));
             }
-            if !block.verify_producer_signature(&expected.address) {
+
+            if !block.verify_signature() {
                 return Err(ConsensusError("Invalid block signature".into()));
             }
+
             println!(
                 "✅ PoA: Block {} signature verified (producer: {})",
                 block.index, producer
@@ -235,9 +318,11 @@ impl ConsensusEngine for PoAEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::KeyPair;
+
     #[test]
     fn test_round_robin() {
-        let engine = PoAEngine::new(vec!["alice".into(), "bob".into(), "charlie".into()]);
+        let engine = PoAEngine::new(vec!["alice".into(), "bob".into(), "charlie".into()], None);
         assert_eq!(engine.expected_proposer(0).unwrap().address, "alice");
         assert_eq!(engine.expected_proposer(1).unwrap().address, "bob");
         assert_eq!(engine.expected_proposer(2).unwrap().address, "charlie");
@@ -245,7 +330,7 @@ mod tests {
     }
     #[test]
     fn test_add_remove_authority() {
-        let mut engine = PoAEngine::new(vec!["alice".into(), "bob".into()]);
+        let mut engine = PoAEngine::new(vec!["alice".into(), "bob".into()], None);
         assert_eq!(engine.active_validator_count(), 2);
         engine.add_authority("charlie".into());
         assert_eq!(engine.active_validator_count(), 3);
@@ -254,33 +339,64 @@ mod tests {
     }
     #[test]
     fn test_voting() {
-        let mut engine = PoAEngine::new(vec![
-            "alice".into(),
-            "bob".into(),
-            "charlie".into(),
-            "eve".into(),
-        ]);
-        let result = engine.vote("alice", "dave".into(), VoteType::Add).unwrap();
+        let alice_key = KeyPair::generate().unwrap();
+        let bob_key = KeyPair::generate().unwrap();
+        let charlie_key = KeyPair::generate().unwrap();
+        let eve_key = KeyPair::generate().unwrap();
+
+        let mut engine = PoAEngine::new(
+            vec![
+                alice_key.public_key_hex(),
+                bob_key.public_key_hex(),
+                charlie_key.public_key_hex(),
+                eve_key.public_key_hex(),
+            ],
+            None,
+        );
+
+        let target = "dave".to_string();
+
+        let mut v1 = Vote::new(alice_key.public_key_hex(), target.clone(), VoteType::Add);
+        v1.sign(&alice_key);
+        let result = engine.vote(v1).unwrap();
         assert!(!result);
-        let result = engine.vote("bob", "dave".into(), VoteType::Add).unwrap();
+
+        let mut v2 = Vote::new(bob_key.public_key_hex(), target.clone(), VoteType::Add);
+        v2.sign(&bob_key);
+        let result = engine.vote(v2).unwrap();
         assert!(!result);
-        let result = engine
-            .vote("charlie", "dave".into(), VoteType::Add)
-            .unwrap();
+
+        let mut v3 = Vote::new(charlie_key.public_key_hex(), target.clone(), VoteType::Add);
+        v3.sign(&charlie_key);
+        let result = engine.vote(v3).unwrap();
         assert!(result);
+
         assert_eq!(engine.active_validator_count(), 5);
     }
+
     #[test]
     fn test_non_validator_cannot_vote() {
-        let mut engine = PoAEngine::new(vec!["alice".into()]);
-        let result = engine.vote("hacker", "dave".into(), VoteType::Add);
+        let alice_key = KeyPair::generate().unwrap();
+        let hacker_key = KeyPair::generate().unwrap();
+
+        let mut engine = PoAEngine::new(vec![alice_key.public_key_hex()], None);
+
+        let mut v = Vote::new(hacker_key.public_key_hex(), "dave".into(), VoteType::Add);
+        v.sign(&hacker_key);
+
+        let result = engine.vote(v);
         assert!(result.is_err());
     }
     #[test]
     fn test_prepare_block() {
-        let engine = PoAEngine::new(vec!["alice".into()]);
+        let keypair = KeyPair::generate().unwrap();
+        let pubkey = keypair.public_key_hex();
+
+        let engine = PoAEngine::new(vec![pubkey.clone()], Some(keypair));
         let mut block = Block::new(1, "0".repeat(64), vec![]);
         engine.prepare_block(&mut block).unwrap();
-        assert!(!block.hash.is_empty());
+
+        assert!(block.signature.is_some());
+        assert!(block.verify_signature());
     }
 }

@@ -2,6 +2,9 @@ use crate::crypto::{verify_signature, KeyPair};
 use crate::hash::calculate_hash;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
+
+pub const DEFAULT_CHAIN_ID: u64 = 1337;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Transaction {
     pub from: String,
@@ -13,34 +16,20 @@ pub struct Transaction {
     pub timestamp: u128,
     pub hash: String,
     pub signature: Option<Vec<u8>>,
+    pub chain_id: u64,
 }
 impl Transaction {
     pub fn new(from: String, to: String, amount: u64, data: Vec<u8>) -> Self {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
-        let mut tx = Transaction {
-            from,
-            to,
-            amount,
-            fee: 0,
-            nonce: 0,
-            data,
-            timestamp,
-            hash: String::new(),
-            signature: None,
-        };
-        tx.hash = tx.calculate_hash();
-        tx
+        Self::new_with_chain_id(from, to, amount, 0, 0, data, DEFAULT_CHAIN_ID)
     }
-    pub fn new_with_fee(
+    pub fn new_with_chain_id(
         from: String,
         to: String,
         amount: u64,
         fee: u64,
         nonce: u64,
         data: Vec<u8>,
+        chain_id: u64,
     ) -> Self {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -56,9 +45,20 @@ impl Transaction {
             timestamp,
             hash: String::new(),
             signature: None,
+            chain_id,
         };
         tx.hash = tx.calculate_hash();
         tx
+    }
+    pub fn new_with_fee(
+        from: String,
+        to: String,
+        amount: u64,
+        fee: u64,
+        nonce: u64,
+        data: Vec<u8>,
+    ) -> Self {
+        Self::new_with_chain_id(from, to, amount, fee, nonce, data, DEFAULT_CHAIN_ID)
     }
     pub fn genesis() -> Self {
         Transaction {
@@ -71,10 +71,12 @@ impl Transaction {
             timestamp: 0,
             hash: "genesis".to_string(),
             signature: None,
+            chain_id: DEFAULT_CHAIN_ID,
         }
     }
     pub fn signing_hash(&self) -> [u8; 32] {
         let mut hasher = Sha3_256::new();
+        hasher.update(b"BDLM_TX_V1");
         hasher.update(self.from.as_bytes());
         hasher.update(self.to.as_bytes());
         hasher.update(self.amount.to_le_bytes());
@@ -82,6 +84,7 @@ impl Transaction {
         hasher.update(self.nonce.to_le_bytes());
         hasher.update(&self.data);
         hasher.update(self.timestamp.to_le_bytes());
+        hasher.update(self.chain_id.to_le_bytes());
         hasher.finalize().into()
     }
     pub fn calculate_hash(&self) -> String {

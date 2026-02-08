@@ -26,6 +26,7 @@ impl Account {
         }
     }
 }
+#[derive(Clone)]
 pub struct AccountState {
     accounts: HashMap<String, Account>,
     storage: Option<Storage>,
@@ -61,7 +62,7 @@ impl AccountState {
     pub fn get_nonce(&self, public_key: &str) -> u64 {
         self.accounts.get(public_key).map(|a| a.nonce).unwrap_or(0)
     }
-    fn get_or_create(&mut self, public_key: &str) -> &mut Account {
+    pub fn get_or_create(&mut self, public_key: &str) -> &mut Account {
         if !self.accounts.contains_key(public_key) {
             self.accounts
                 .insert(public_key.to_string(), Account::new(public_key.to_string()));
@@ -186,6 +187,18 @@ impl AccountState {
                 account.nonce
             );
         }
+    }
+    pub fn get_all_balances(&self) -> HashMap<String, u64> {
+        self.accounts
+            .iter()
+            .map(|(k, v)| (k.clone(), v.balance))
+            .collect()
+    }
+    pub fn get_all_nonces(&self) -> HashMap<String, u64> {
+        self.accounts
+            .iter()
+            .map(|(k, v)| (k.clone(), v.nonce))
+            .collect()
     }
 }
 impl Default for AccountState {

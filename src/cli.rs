@@ -65,6 +65,8 @@ pub struct NodeConfig {
     pub validator_address: Option<String>,
     #[arg(long)]
     pub dial: Option<String>,
+    #[arg(long, default_value = "1337")]
+    pub chain_id: u64,
 }
 impl NodeConfig {
     pub fn load_validators(&self) -> Vec<String> {

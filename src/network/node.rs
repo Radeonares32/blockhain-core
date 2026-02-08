@@ -22,7 +22,7 @@ pub struct BudlumBehaviour {
     gossipsub: gossipsub::Behaviour,
     kad: Kademlia<MemoryStore>,
 }
-use crate::Block;
+use crate::network::peer_manager::PeerManager;
 use crate::Blockchain;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -51,7 +51,7 @@ impl NodeClient {
 async fn test_node_creation() {
     use crate::consensus::PoWEngine;
     let consensus = std::sync::Arc::new(PoWEngine::new(2));
-    let blockchain = Arc::new(Mutex::new(Blockchain::new(consensus, None)));
+    let blockchain = Arc::new(Mutex::new(Blockchain::new(consensus, None, 1337, None)));
     let node = Node::new(blockchain);
     assert!(node.is_ok());
 }
@@ -61,6 +61,7 @@ pub struct Node {
     command_tx: mpsc::Sender<NodeCommand>,
     pub peer_id: PeerId,
     pub blockchain: Arc<Mutex<Blockchain>>,
+    pub peer_manager: Arc<Mutex<PeerManager>>,
 }
 impl Node {
     pub fn new(blockchain: Arc<Mutex<Blockchain>>) -> Result<Self, Box<dyn Error>> {
@@ -76,6 +77,7 @@ impl Node {
             .heartbeat_interval(Duration::from_secs(10))
             .validation_mode(gossipsub::ValidationMode::Strict)
             .message_id_fn(message_id_fn)
+            .max_transmit_size(crate::network::protocol::MAX_MESSAGE_SIZE)
             .build()
             .map_err(|msg| std::io::Error::new(std::io::ErrorKind::Other, msg))?;
         let gossipsub = gossipsub::Behaviour::new(
@@ -115,12 +117,14 @@ impl Node {
             .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60)))
             .build();
         let (command_tx, command_rx) = mpsc::channel(32);
+        let peer_manager = Arc::new(Mutex::new(PeerManager::new()));
         Ok(Node {
             swarm,
             peer_id,
             command_tx,
             command_rx,
             blockchain,
+            peer_manager,
         })
     }
     pub fn get_client(&self) -> NodeClient {
@@ -240,21 +244,54 @@ impl Node {
                             message_id: id,
                             message,
                         })) => {
+
+                            if self.peer_manager.lock().unwrap().is_banned(&peer_id) {
+                                warn!("⛔ Ignoring message from banned peer {}", peer_id);
+                                continue;
+                            }
+
                             info!("📨 Received from {}: id={}", peer_id, id);
-                            if let Ok(msg) = NetworkMessage::from_bytes(&message.data) {
-                                match msg {
+                            match NetworkMessage::from_bytes_validated(&message.data) {
+                                Ok(msg) => match msg {
                                     NetworkMessage::Block(block) => {
+                                        if let Err(e) = NetworkMessage::validate_block_size(&block) {
+                                            warn!("❌ Received oversized block from {}: {:?}", peer_id, e);
+                                            self.peer_manager.lock().unwrap().report_oversized_message(&peer_id);
+                                            continue;
+                                        }
                                         info!("📦 BLOCK: #{} Hash: {}...", block.index, &block.hash[..8]);
                                         let mut chain = self.blockchain.lock().unwrap();
                                         if block.index == chain.chain.len() as u64 {
-                                            info!("✅ Added block #{} to local chain", block.index);
+                                            match chain.validate_and_add_block(block.clone()) {
+                                                Ok(_) => {
+                                                    info!("✅ Added block #{} to local chain", block.index);
+                                                    self.peer_manager.lock().unwrap().report_good_behavior(&peer_id);
+                                                }
+                                                Err(e) => {
+                                                    warn!("❌ Block validation failed: {}", e);
+                                                    self.peer_manager.lock().unwrap().report_invalid_block(&peer_id);
+                                                }
+                                            }
                                         }
                                     }
                                     NetworkMessage::Transaction(tx) => {
+                                        if let Err(e) = NetworkMessage::validate_tx_size(&tx) {
+                                            warn!("❌ Received oversized transaction from {}: {:?}", peer_id, e);
+                                            self.peer_manager.lock().unwrap().report_oversized_message(&peer_id);
+                                            continue;
+                                        }
                                         info!("💸 TX: {}->{} Amount: {}",
                                             &tx.from[..8], &tx.to[..8], tx.amount);
                                         let mut chain = self.blockchain.lock().unwrap();
-                                        chain.add_transaction(tx);
+                                        match chain.add_transaction(tx) {
+                                            Ok(_) => {
+                                                self.peer_manager.lock().unwrap().report_good_behavior(&peer_id);
+                                            }
+                                            Err(e) => {
+                                                warn!("Failed to add transaction: {}", e);
+                                                self.peer_manager.lock().unwrap().report_invalid_tx(&peer_id);
+                                            }
+                                        }
                                     }
                                     NetworkMessage::GetBlocks => {
                                         info!("📥 Received GetBlocks request from {}", peer_id);
@@ -269,16 +306,25 @@ impl Node {
                                     }
                                     NetworkMessage::Chain(blocks) => {
                                         info!("⛓️ Received Chain with {} blocks form {}", blocks.len(), peer_id);
+
                                         let mut chain = self.blockchain.lock().unwrap();
                                         if blocks.len() > chain.chain.len() {
                                             if chain.is_valid_chain(&blocks) {
                                                 info!("✅ Replaced local chain with longer chain (len: {})", blocks.len());
                                                 chain.chain = blocks;
+                                                self.peer_manager.lock().unwrap().report_good_behavior(&peer_id);
                                             } else {
                                                 warn!("❌ Received invalid chain!");
+
+                                                self.peer_manager.lock().unwrap().report_invalid_block(&peer_id);
                                             }
                                         }
                                     }
+                                },
+                                Err(e) => {
+                                    warn!("❌ Computed invalid message from {}: {:?}", peer_id, e);
+
+                                    self.peer_manager.lock().unwrap().report_oversized_message(&peer_id);
                                 }
                             }
                         }

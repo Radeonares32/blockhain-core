@@ -30,6 +30,7 @@ impl Storage {
         self.db.flush()?;
         Ok(())
     }
+
     pub fn get_last_hash(&self) -> std::io::Result<Option<String>> {
         if let Some(val) = self.db.get("LAST")? {
             let hash = from_utf8(&val).unwrap().to_string();
@@ -37,6 +38,21 @@ impl Storage {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn load_chain(&self) -> std::io::Result<Vec<Block>> {
+        let mut chain = Vec::new();
+        if let Some(mut current_hash) = self.get_last_hash()? {
+            while let Ok(Some(block)) = self.get_block(&current_hash) {
+                chain.push(block.clone());
+                if block.previous_hash == "0".repeat(64) {
+                    break;
+                }
+                current_hash = block.previous_hash;
+            }
+        }
+        chain.reverse();
+        Ok(chain)
     }
     pub fn db(&self) -> &Db {
         &self.db

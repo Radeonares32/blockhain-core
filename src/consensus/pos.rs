@@ -49,16 +49,27 @@ impl Validator {
         }
     }
 }
-#[derive(Debug, Clone)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SlashingEvidence {
     pub validator: String,
     pub block1_hash: String,
     pub block2_hash: String,
+    pub signature1: Vec<u8>,
+    pub signature2: Vec<u8>,
     pub slot: u64,
     pub timestamp: u128,
 }
 impl SlashingEvidence {
-    pub fn new(validator: String, block1_hash: String, block2_hash: String, slot: u64) -> Self {
+    pub fn new(
+        validator: String,
+        block1_hash: String,
+        block2_hash: String,
+        signature1: Vec<u8>,
+        signature2: Vec<u8>,
+        slot: u64,
+    ) -> Self {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -67,6 +78,8 @@ impl SlashingEvidence {
             validator,
             block1_hash,
             block2_hash,
+            signature1,
+            signature2,
             slot,
             timestamp,
         }
@@ -78,6 +91,8 @@ pub struct Checkpoint {
     pub block_hash: String,
     pub timestamp: u128,
 }
+use crate::crypto::KeyPair;
+
 pub struct PoSEngine {
     pub config: PoSConfig,
     pub validators: HashMap<String, Validator>,
@@ -85,9 +100,10 @@ pub struct PoSEngine {
     seen_blocks: HashMap<(String, u64), String>,
     slashing_evidence: Vec<SlashingEvidence>,
     checkpoints: Vec<Checkpoint>,
+    keypair: Option<KeyPair>,
 }
 impl PoSEngine {
-    pub fn new(min_stake: u64) -> Self {
+    pub fn new(min_stake: u64, keypair: Option<KeyPair>) -> Self {
         PoSEngine {
             config: PoSConfig {
                 min_stake,
@@ -98,9 +114,10 @@ impl PoSEngine {
             seen_blocks: HashMap::new(),
             slashing_evidence: Vec::new(),
             checkpoints: Vec::new(),
+            keypair,
         }
     }
-    pub fn with_config(config: PoSConfig) -> Self {
+    pub fn with_config(config: PoSConfig, keypair: Option<KeyPair>) -> Self {
         PoSEngine {
             config,
             validators: HashMap::new(),
@@ -108,6 +125,7 @@ impl PoSEngine {
             seen_blocks: HashMap::new(),
             slashing_evidence: Vec::new(),
             checkpoints: Vec::new(),
+            keypair,
         }
     }
     pub fn add_stake(&mut self, pubkey: String, amount: u64) -> Result<(), ConsensusError> {
@@ -193,6 +211,8 @@ impl PoSEngine {
                     producer.to_string(),
                     existing_hash.clone(),
                     block_hash.to_string(),
+                    vec![],
+                    vec![],
                     slot,
                 );
                 println!(
@@ -268,14 +288,7 @@ impl PoSEngine {
             / slots_per_year as f64) as u64;
         reward.max(1)
     }
-    fn create_stake_proof(&self, validator: &Validator, block: &Block) -> Vec<u8> {
-        let mut hasher = Sha3_256::new();
-        hasher.update(validator.pubkey.as_bytes());
-        hasher.update(validator.stake.to_le_bytes());
-        hasher.update(block.previous_hash.as_bytes());
-        hasher.update(block.index.to_le_bytes());
-        hasher.finalize().to_vec()
-    }
+
     pub fn get_slashing_evidence(&self) -> &[SlashingEvidence] {
         &self.slashing_evidence
     }
@@ -376,20 +389,38 @@ impl ConsensusEngine for PoSEngine {
         println!("🥩 PoS: Preparing block for slot {}", slot);
         if !self.validators.is_empty() {
             if let Some(validator) = self.select_validator(&block.previous_hash, slot) {
+                let pubkey = &validator.pubkey;
                 println!(
                     "🥩 PoS: Selected validator: {} (stake: {})",
-                    &validator.pubkey[..16.min(validator.pubkey.len())],
+                    &pubkey[..16.min(pubkey.len())],
                     validator.stake
                 );
-                block.producer = Some(validator.pubkey.clone());
-                block.hash = block.calculate_hash();
-                let stake_proof = self.create_stake_proof(validator, block);
-                block.add_stake_proof(stake_proof);
-                println!(
-                    "✍️  PoS: Block {} prepared for {}",
-                    block.index,
-                    &validator.pubkey[..16.min(validator.pubkey.len())]
-                );
+
+                if let Some(keypair) = &self.keypair {
+                    if keypair.public_key_hex() == *pubkey {
+                        block.sign(keypair);
+
+                        block.add_stake_proof(block.signature.clone().unwrap());
+                        println!(
+                            "✍️  PoS: Block {} signed by selected validator {}",
+                            block.index,
+                            &pubkey[..16.min(pubkey.len())]
+                        );
+                    } else {
+                        println!(
+                            "⚠️  PoS: We are not the selected validator (us: {}, selected: {})",
+                            keypair.public_key_hex(),
+                            pubkey
+                        );
+                    }
+                } else {
+                    println!("⚠️  PoS: No keypair configured, cannot sign block");
+                }
+
+                if block.signature.is_none() {
+                    block.producer = Some(pubkey.clone());
+                    block.hash = block.calculate_hash();
+                }
             } else {
                 return Err(ConsensusError("No active validator available".into()));
             }
@@ -434,23 +465,84 @@ impl ConsensusEngine for PoSEngine {
                     &producer[..16.min(producer.len())]
                 )));
             }
-            if block.signature.is_some() {
-                if !block.verify_signature() {
-                    return Err(ConsensusError("Invalid block signature".into()));
-                }
+
+            if !block.verify_signature() {
+                return Err(ConsensusError("Invalid block signature".into()));
             }
-            let expected_proof = self.create_stake_proof(&expected, block);
+
             match &block.stake_proof {
-                Some(proof) if proof == &expected_proof => {
-                    println!("✅ PoS: Stake proof verified for block {}", block.index);
-                }
-                Some(_) => {
-                    return Err(ConsensusError("Invalid stake proof".into()));
+                Some(proof) => {
+                    if let Some(sig) = &block.signature {
+                        if proof != sig {
+                            return Err(ConsensusError(
+                                "Stake proof does not match signature".into(),
+                            ));
+                        }
+                    }
                 }
                 None => {
                     return Err(ConsensusError("Missing stake proof".into()));
                 }
             }
+
+            if let Some(evidences) = &block.slashing_evidence {
+                for (i, evidence) in evidences.iter().enumerate() {
+                    let validator_bytes = match hex::decode(&evidence.validator) {
+                        Ok(bytes) => bytes,
+                        Err(_) => {
+                            return Err(ConsensusError(format!(
+                                "Invalid validator hex in slashing evidence #{}",
+                                i
+                            )))
+                        }
+                    };
+
+                    if crate::crypto::verify_signature(
+                        evidence.block1_hash.as_bytes(),
+                        &evidence.signature1,
+                        &validator_bytes,
+                    )
+                    .is_err()
+                    {
+                        return Err(ConsensusError(format!(
+                            "Invalid signature1 in slashing evidence #{}",
+                            i
+                        )));
+                    }
+                    if crate::crypto::verify_signature(
+                        evidence.block2_hash.as_bytes(),
+                        &evidence.signature2,
+                        &validator_bytes,
+                    )
+                    .is_err()
+                    {
+                        return Err(ConsensusError(format!(
+                            "Invalid signature2 in slashing evidence #{}",
+                            i
+                        )));
+                    }
+
+                    if evidence.block1_hash == evidence.block2_hash {
+                        return Err(ConsensusError(format!(
+                            "Invalid evidence #{}: hashes are identical",
+                            i
+                        )));
+                    }
+
+                    if !self.validators.contains_key(&evidence.validator) {
+                        println!(
+                            "⚠️  Warning: Slashing evidence for unknown validator {}",
+                            evidence.validator
+                        );
+                    } else {
+                        println!(
+                            "⚖️  Valid Slashing Evidence found for validator {}",
+                            evidence.validator
+                        );
+                    }
+                }
+            }
+
             println!(
                 "✅ PoS: Block {} validated (producer: {}, stake: {})",
                 block.index,
@@ -491,9 +583,11 @@ impl ConsensusEngine for PoSEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::KeyPair;
+
     #[test]
     fn test_stake_management() {
-        let mut engine = PoSEngine::new(100);
+        let mut engine = PoSEngine::new(100, None);
         engine.add_stake("validator1".into(), 500).unwrap();
         engine.add_stake("validator2".into(), 300).unwrap();
         assert_eq!(engine.total_stake, 800);
@@ -502,13 +596,13 @@ mod tests {
     }
     #[test]
     fn test_minimum_stake() {
-        let mut engine = PoSEngine::new(1000);
+        let mut engine = PoSEngine::new(1000, None);
         let result = engine.add_stake("weak_validator".into(), 500);
         assert!(result.is_err());
     }
     #[test]
     fn test_validator_selection() {
-        let mut engine = PoSEngine::new(100);
+        let mut engine = PoSEngine::new(100, None);
         engine.add_stake("alice".into(), 1000).unwrap();
         engine.add_stake("bob".into(), 500).unwrap();
         engine.add_stake("charlie".into(), 500).unwrap();
@@ -520,7 +614,7 @@ mod tests {
     }
     #[test]
     fn test_slashing() {
-        let mut engine = PoSEngine::new(100);
+        let mut engine = PoSEngine::new(100, None);
         engine.add_stake("bad_actor".into(), 1000).unwrap();
         let penalty = engine.slash("bad_actor").unwrap();
         assert_eq!(penalty, 100);
@@ -528,7 +622,7 @@ mod tests {
     }
     #[test]
     fn test_weighted_selection() {
-        let mut engine = PoSEngine::new(100);
+        let mut engine = PoSEngine::new(100, None);
         engine.add_stake("alice".into(), 8000).unwrap();
         engine.add_stake("bob".into(), 2000).unwrap();
         let mut alice_count = 0;
@@ -546,7 +640,7 @@ mod tests {
     }
     #[test]
     fn test_double_sign_detection() {
-        let mut engine = PoSEngine::new(100);
+        let mut engine = PoSEngine::new(100, None);
         engine.add_stake("validator1".into(), 1000).unwrap();
         let result1 = engine.check_and_record_block("validator1", 10, "hash1");
         assert!(result1.is_ok());
@@ -559,7 +653,7 @@ mod tests {
     }
     #[test]
     fn test_double_sign_penalty() {
-        let mut engine = PoSEngine::new(100);
+        let mut engine = PoSEngine::new(100, None);
         engine.add_stake("bad_validator".into(), 1000).unwrap();
         engine
             .check_and_record_block("bad_validator", 5, "block_a")
@@ -570,10 +664,25 @@ mod tests {
     }
     #[test]
     fn test_checkpoint() {
-        let mut engine = PoSEngine::new(100);
+        let mut engine = PoSEngine::new(100, None);
         let block = Block::new(32, "prev".into(), vec![]);
         engine.add_checkpoint(&block);
         assert_eq!(engine.get_checkpoints().len(), 1);
         assert_eq!(engine.get_checkpoints()[0].block_index, 32);
+    }
+    #[test]
+    fn test_pos_signing() {
+        let keypair = KeyPair::generate().unwrap();
+        let pubkey = keypair.public_key_hex();
+
+        let mut engine = PoSEngine::new(100, Some(keypair));
+        engine.add_stake(pubkey.clone(), 1000).unwrap();
+
+        let mut block = Block::new(1, "0".repeat(64), vec![]);
+
+        engine.prepare_block(&mut block).unwrap();
+
+        assert!(block.signature.is_some());
+        assert!(block.verify_signature());
     }
 }

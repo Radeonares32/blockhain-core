@@ -1,5 +1,5 @@
 mod poa;
-mod pos;
+pub mod pos;
 mod pow;
 use crate::Block;
 pub use poa::PoAEngine;
