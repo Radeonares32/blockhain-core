@@ -299,4 +299,22 @@ mod tests {
         assert!(pool.add_transaction(tx2).is_ok());
         assert_eq!(pool.len(), 1);
     }
+
+    #[test]
+    fn test_cleanup_expired() {
+        let mut config = MempoolConfig::default();
+        config.tx_ttl_secs = 1;
+        let mut pool = Mempool::new(config);
+
+        let tx = create_test_tx("alice", 0, 10);
+        pool.add_transaction(tx).unwrap();
+        assert_eq!(pool.len(), 1);
+
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        let removed = pool.cleanup_expired();
+        assert_eq!(removed, 1);
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+    }
 }

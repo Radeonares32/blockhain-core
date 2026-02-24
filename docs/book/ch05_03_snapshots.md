@@ -59,28 +59,39 @@ pub fn create_snapshot(&self, state: &AccountState) {
 }
 ```
 
-### Fonksiyon: `prune_history` (Geçmişi Silme)
+### Fonksiyon: `prune_history` ve Otokontrol (Pruning Hook)
 
-Eğer elimizde 100.000. bloğun snapshot'ı varsa, 0 ile 90.000 arasındaki bloklara artık ihtiyacımız yoktur (Validasyon için).
+Snapshot alınırken, veritabanını (`sled::Db`) yöneten `Storage` modülüne eski verileri silmesi emredilir.
+
+Budlum Core'daki ana blok işleme döngüsü (bkz: `Blockchain::validate_and_add_block`) her yeni blok geldiğinde şunu sorar:
 
 ```rust
-pub fn prune_history(&self, current_height: u64) {
-    // Güvenlik Marjı: Son 1000 bloğu silme (Reorg olabilir).
-    let safe_height = current_height - 1000;
+if let Some(ref pruning_manager) = self.pruning_manager {
+    let height = last_block.index;
     
-    // Veritabanını tara.
-    for i in 0..safe_height {
-        self.db.remove(format!("BLOCK:{}", i));
-        self.db.remove(format!("TX:{}", i)); // O bloktaki işlemleri de sil.
+    // 1. Snapshot alma vakti geldi mi? (Örn: Her 10.000 blokta bir)
+    if pruning_manager.should_create_snapshot(height) {
+        
+        let snapshot = StateSnapshot::from_state(height, last_block.hash.clone(), self.chain_id, &self.state);
+        pruning_manager.save_snapshot(&snapshot);
+        
+        // 2. Güvenlik marjı dışında kalan, artık ihtiyacımız olmayan eski blokları bul.
+        let prunable = pruning_manager.get_prunable_blocks(self.chain.len() as u64, height);
+        
+        if !prunable.is_empty() {
+            if let Some(ref store) = self.storage {
+                // 3. Blokları ve State eşlemelerini Hard Diskten tamamen sil (Pruning).
+                for block_index in &prunable {
+                    let _ = store.delete_block(*block_index);
+                }
+            }
+        }
     }
-    
-    // Veritabanını sıkıştır (Compact/Vacuum).
-    self.db.compact();
 }
 ```
 
 **Neden Güvenlik Marjı (Safety Margin)?**
-Zincirin en ucunda bazen çatallanmalar (Micro-forks) olur. Son 10-20 blok değişebilir. Eğer snapshot alır almaz hemen önceki blokları silersek ve zincir başka bir dala (Reorg) geçerse, verisiz kalırız ve düğüm çöker. Bu yüzden her zaman bir miktar "tampon bölge" (buffer) bırakılır.
+Zincirin en ucunda bazen çatallanmalar (Micro-forks) olur. Son 10-20 blok değişebilir. Eğer snapshot alır almaz hemen önceki blokları silersek ve zincir başka bir dala (Reorg) geçerse, verisiz kalırız ve düğüm çöker. Bu yüzden `PruningManager::new(min_blocks, ...)` ayarlandığında, her zaman bir miktar "tampon bölge" (buffer) bırakılır.
 
 ---
 

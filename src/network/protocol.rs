@@ -15,6 +15,8 @@ pub enum MessageError {
     VersionMismatch { expected: u32, got: u32 },
 }
 
+pub const MAX_SNAP_BATCH: u64 = 256;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NetworkMessage {
     Handshake {
@@ -47,6 +49,19 @@ pub enum NetworkMessage {
 
     Blocks(Vec<Block>),
 
+    GetBlocksByHeight {
+        from_height: u64,
+        to_height: u64,
+    },
+
+    BlocksByHeight(Vec<Block>),
+
+    StateSnapshotResponse {
+        height: u64,
+        state_root: String,
+        ok: bool,
+    },
+
     NewTip {
         height: u64,
         hash: String,
@@ -65,26 +80,39 @@ pub enum NetworkMessage {
 }
 impl NetworkMessage {
     pub fn to_bytes(&self) -> Vec<u8> {
-        serde_json::to_vec(self).unwrap()
+        use prost::Message;
+        let proto_msg = crate::network::proto_conversions::pb::ProtoNetworkMessage::from(self);
+        proto_msg.encode_to_vec()
     }
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, serde_json::Error> {
-        serde_json::from_slice(bytes)
+    
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        use prost::Message;
+        let proto_msg = crate::network::proto_conversions::pb::ProtoNetworkMessage::decode(bytes)
+            .map_err(|e| format!("Protobuf decode error: {}", e))?;
+        Self::try_from(proto_msg)
     }
+    
     pub fn from_bytes_validated(bytes: &[u8]) -> Result<Self, MessageError> {
         if bytes.len() > MAX_MESSAGE_SIZE {
             return Err(MessageError::TooLarge(bytes.len()));
         }
-        serde_json::from_slice(bytes).map_err(|e| MessageError::ParseError(e.to_string()))
+        Self::from_bytes(bytes).map_err(|e| MessageError::ParseError(e))
     }
+    
     pub fn validate_block_size(block: &Block) -> Result<(), MessageError> {
-        let size = serde_json::to_vec(block).unwrap_or_default().len();
+        use prost::Message;
+        let proto_block = crate::network::proto_conversions::pb::ProtoBlock::from(block);
+        let size = proto_block.encoded_len();
         if size > MAX_BLOCK_SIZE {
             return Err(MessageError::TooLarge(size));
         }
         Ok(())
     }
+    
     pub fn validate_tx_size(tx: &Transaction) -> Result<(), MessageError> {
-        let size = serde_json::to_vec(tx).unwrap_or_default().len();
+        use prost::Message;
+        let proto_tx = crate::network::proto_conversions::pb::ProtoTransaction::from(tx);
+        let size = proto_tx.encoded_len();
         if size > MAX_TX_SIZE {
             return Err(MessageError::TooLarge(size));
         }

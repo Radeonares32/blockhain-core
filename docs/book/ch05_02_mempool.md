@@ -103,3 +103,37 @@ Kullanıcı işleminin takıldığını görürse, aynı nonce ile **daha yükse
 3.  Fazlaysa eskisini sil, yenisini ekle.
 
 Bu mekanizma, "Takılan işlemi kurtarma" (Unsticking Transaction) olarak bilinir.
+
+---
+
+## 4. Çöp Toplama (Garbage Collection / GC)
+
+İşlemler sonsuza kadar Mempool'da bekleyemez. Aksi takdirde, ağda düşük ücretli milyonlarca spam işlem bellek (RAM) şişmesine (OOM) yol açar.
+
+### Fonksiyon: `cleanup_expired`
+
+Mempool, yapılandırmasında (`MempoolConfig`) bir "Yaşam Süresi" (TTL) barındırır. Arka planda Node'un `tokio::time::interval` görevleri tarafından periyodik (örn. 60 sn'de bir) olarak çağrılır.
+
+```rust
+pub fn cleanup_expired(&mut self) -> usize {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    
+    // Süresi dolan işlemlerin hash'lerini bul
+    let mut expired = Vec::new();
+    for (hash, entry) in self.transactions.iter() {
+        if now - entry.received_at > self.config.tx_ttl_secs {
+            expired.push(hash.clone());
+        }
+    }
+
+    // Hash'leri kullanarak işlemleri bellekten sil
+    let count = expired.len();
+    for hash in expired {
+        self.remove_transaction(&hash);
+    }
+    
+    count // Temizlenen işlem sayısını döndür
+}
+```
+
+Bu periyodik temizleyici sayesinde ağ, kendi hafızasını (Mempool'u) otomatik ve sistemli olarak sürekli temizler.

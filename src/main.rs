@@ -32,9 +32,9 @@ async fn main() {
         .with_max_level(Level::INFO)
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
-    println!("🚀 Budlum Node - v0.2.0 (Framework Edition)");
+    println!("Budlum Node - v0.2.0 (Framework Edition)");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("📋 Configuration:");
+    println!("Configuration:");
     println!("   Port: {}", config.port);
     println!("   Consensus: {:?}", config.consensus);
     println!("   Privacy: {:?}", config.privacy);
@@ -42,11 +42,11 @@ async fn main() {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     let consensus: Arc<dyn ConsensusEngine> = match config.consensus {
         ConsensusType::PoW => {
-            println!("⛏️  PoW mode - difficulty: {}", config.difficulty);
+            println!(" PoW mode - difficulty: {}", config.difficulty);
             Arc::new(PoWEngine::new(config.difficulty))
         }
         ConsensusType::PoS => {
-            println!("🥩 PoS mode - min stake: {}", config.min_stake);
+            println!("PoS mode - min stake: {}", config.min_stake);
             let pos_config = crate::consensus::pos::PoSConfig {
                  min_stake: config.min_stake,
                  ..Default::default()
@@ -54,14 +54,14 @@ async fn main() {
             Arc::new(PoSEngine::new(pos_config, None))
         }
         ConsensusType::PoA => {
-            println!("👥 PoA mode");
+            println!("PoA mode");
             Arc::new(PoAEngine::new(crate::consensus::poa::PoAConfig::default(), None))
         }
     };
     let storage = match storage::Storage::new(&config.db_path) {
         Ok(s) => Some(s),
         Err(e) => {
-            println!("❌ Failed to initialize storage: {}", e);
+            println!("Failed to initialize storage: {}", e);
             None
         }
     };
@@ -78,7 +78,7 @@ async fn main() {
     if let ConsensusType::PoA = config.consensus {
          let validators = config.load_validators();
          if !validators.is_empty() {
-             println!("👥 Initializing PoA validators: {:?}", validators);
+             println!("Initializing PoA validators: {:?}", validators);
              let mut bc = blockchain.lock().unwrap();
              for addr in validators {
                  let mut v = crate::account::Validator::new(addr.clone(), 0);
@@ -86,14 +86,14 @@ async fn main() {
                  bc.state.validators.insert(addr, v);
              }
          } else {
-             println!("⚠️  No validators configured!");
+             println!(" No validators configured!");
          }
     }
 
     let mut node = Node::new(blockchain.clone()).unwrap();
     if let Some(ref addr) = config.bootstrap {
         if let Err(e) = node.bootstrap(addr) {
-            eprintln!("❌ Failed to bootstrap: {}", e);
+            eprintln!("Failed to bootstrap: {}", e);
         }
     }
     node.listen(config.port).unwrap();
@@ -144,7 +144,7 @@ async fn main() {
                         }
                         "help" => {
                             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                            println!("📖 Commands:");
+                            println!("Commands:");
                             println!("   tx    - Send demo transaction");
                             println!("   mine  - Produce new block");
                             println!("   chain - Show blockchain info");

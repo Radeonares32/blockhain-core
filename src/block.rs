@@ -42,10 +42,11 @@ impl BlockHeader {
             .as_ref()
             .map(|p| p.as_bytes().to_vec())
             .unwrap_or_default();
+            
         let evidence_bytes = self
             .slashing_evidence
             .as_ref()
-            .map(|e| serde_json::to_vec(e).unwrap_or_default())
+            .map(|e| bincode::serialize(e).unwrap_or_default())
             .unwrap_or_default();
 
         hash_fields(&[
@@ -132,7 +133,10 @@ impl Block {
         block
     }
     pub fn genesis() -> Self {
-        Block::new(0, "0".repeat(64), vec![Transaction::genesis()])
+        let mut block = Block::new(0, "0".repeat(64), vec![Transaction::genesis()]);
+        block.timestamp = 0;
+        block.hash = block.calculate_hash();
+        block
     }
 
     pub fn calculate_tx_root(&self) -> String {
