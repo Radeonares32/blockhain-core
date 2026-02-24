@@ -34,7 +34,7 @@ async fn main() {
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
     println!("Budlum Node - v0.2.0 (Framework Edition)");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("📋 Configuration:");
+    println!("Configuration:");
     println!("   Port: {}", config.port);
     println!("   Consensus: {:?}", config.consensus);
     println!("   Privacy: {:?}", config.privacy);
@@ -46,7 +46,7 @@ async fn main() {
             Arc::new(PoWEngine::new(config.difficulty))
         }
         ConsensusType::PoS => {
-            println!("🥩 PoS mode - min stake: {}", config.min_stake);
+            println!("PoS mode - min stake: {}", config.min_stake);
             let pos_config = crate::consensus::pos::PoSConfig {
                  min_stake: config.min_stake,
                  ..Default::default()
@@ -54,7 +54,7 @@ async fn main() {
             Arc::new(PoSEngine::new(pos_config, None))
         }
         ConsensusType::PoA => {
-            println!("👥 PoA mode");
+            println!("PoA mode");
             Arc::new(PoAEngine::new(crate::consensus::poa::PoAConfig::default(), None))
         }
     };
@@ -78,7 +78,7 @@ async fn main() {
     if let ConsensusType::PoA = config.consensus {
          let validators = config.load_validators();
          if !validators.is_empty() {
-             println!("👥 Initializing PoA validators: {:?}", validators);
+             println!("Initializing PoA validators: {:?}", validators);
              let mut bc = blockchain.lock().unwrap();
              for addr in validators {
                  let mut v = crate::account::Validator::new(addr.clone(), 0);
@@ -144,7 +144,7 @@ async fn main() {
                         }
                         "help" => {
                             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                            println!("📖 Commands:");
+                            println!("Commands:");
                             println!("   tx    - Send demo transaction");
                             println!("   mine  - Produce new block");
                             println!("   chain - Show blockchain info");

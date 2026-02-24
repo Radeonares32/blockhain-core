@@ -77,7 +77,7 @@ impl ConsensusEngine for PoAEngine {
 
         if !expected_signer_addr.is_empty() {
             println!(
-                "👥 PoA: Block {} should be proposed by: {}",
+                "PoA: Block {} should be proposed by: {}",
                 slot,
                 &expected_signer_addr[..16.min(expected_signer_addr.len())]
             );
@@ -108,7 +108,7 @@ impl ConsensusEngine for PoAEngine {
             block.hash = block.calculate_hash();
         }
 
-        println!("👥 PoA: Block {} prepared", block.index);
+        println!("PoA: Block {} prepared", block.index);
         Ok(())
     }
 

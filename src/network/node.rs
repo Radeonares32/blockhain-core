@@ -68,7 +68,7 @@ impl Node {
     pub fn new(blockchain: Arc<Mutex<Blockchain>>) -> Result<Self, Box<dyn Error>> {
         let local_key = identity::Keypair::generate_ed25519();
         let peer_id = PeerId::from(local_key.public());
-        info!("🔑 Node ID: {}", peer_id);
+        info!("Node ID: {}", peer_id);
         let message_id_fn = |message: &gossipsub::Message| {
             let mut s = DefaultHasher::new();
             message.data.hash(&mut s);
@@ -146,13 +146,13 @@ impl Node {
     pub fn listen(&mut self, port: u16) -> Result<(), Box<dyn Error>> {
         let addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
         self.swarm.listen_on(addr)?;
-        info!("👂 Listening on port {}", port);
+        info!("Listening on port {}", port);
         Ok(())
     }
     pub fn dial(&mut self, addr: &str) -> Result<(), Box<dyn Error>> {
         let remote: Multiaddr = addr.parse()?;
         self.swarm.dial(remote)?;
-        info!("📞 Dialing {}", addr);
+        info!("Dialing {}", addr);
         Ok(())
     }
     pub fn bootstrap(&mut self, addr: &str) -> Result<(), Box<dyn Error>> {
@@ -164,7 +164,7 @@ impl Node {
             Some(libp2p::multiaddr::Protocol::P2p(peer_id)) => peer_id,
             _ => return Err("Bootstrap address must contain /p2p/<ID>".into()),
         };
-        info!("👢 Bootstrapping via {}", addr);
+        info!("Bootstrapping via {}", addr);
         self.swarm
             .behaviour_mut()
             .kad
@@ -179,8 +179,30 @@ impl Node {
                 warn!("Bootstrap dial failed for {}: {}", addr, e);
             }
         }
+        let mut gc_interval = tokio::time::interval(Duration::from_secs(60));
+        let mut discovery_interval = tokio::time::interval(Duration::from_secs(300));
+
         loop {
             tokio::select! {
+                _ = gc_interval.tick() => {
+                    let mut chain = self.blockchain.lock().unwrap();
+                    let removed = chain.mempool.cleanup_expired();
+                    if removed > 0 {
+                        info!("Cleaned up {} expired transactions from mempool", removed);
+                    }
+                    drop(chain);
+
+                    let mut pm = self.peer_manager.lock().unwrap();
+                    pm.cleanup_expired_bans();
+                }
+                _ = discovery_interval.tick() => {
+                    info!("Running periodic peer discovery...");
+                    for addr in self.bootstrap_peers.clone() {
+                        if let Err(e) = self.bootstrap(&addr) {
+                            warn!("Periodic bootstrap failed for {}: {}", addr, e);
+                        }
+                    }
+                }
                 cmd = self.command_rx.recv() => {
                     if let Some(cmd) = cmd {
                         match cmd {
@@ -198,12 +220,12 @@ impl Node {
                                 if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(topic.clone(), data) {
                                     warn!("Failed to publish: {}", e);
                                 } else {
-                                    info!("📢 Broadcasted to {}: {:?}", topic, msg);
+                                    info!("Broadcasted to {}: {:?}", topic, msg);
                                 }
                             }
                             NodeCommand::ListPeers => {
                                 let peers: Vec<_> = self.swarm.behaviour().gossipsub.all_peers().collect();
-                                info!("👥 Connected peers: {:?}", peers.len());
+                                info!("Connected peers: {:?}", peers.len());
                                 for (peer, _topics) in peers {
                                     info!(" - {}", peer);
                                 }
@@ -214,7 +236,7 @@ impl Node {
                 event = self.swarm.select_next_some() => {
                     match event {
                         SwarmEvent::NewListenAddr { address, .. } => {
-                            info!("📍 Listening on {}", address);
+                            info!("Listening on {}", address);
                         }
                         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                             info!("Connected to {}", peer_id);
@@ -223,7 +245,7 @@ impl Node {
                             if chain.chain.len() == 1 {
                                 let locator = vec![chain.chain.last().unwrap().hash.clone()];
                                 drop(chain);
-                                info!("🔌 New connection, requesting headers...");
+                                info!("New connection, requesting headers...");
                                 let topic = gossipsub::IdentTopic::new("blocks");
                                 let msg = NetworkMessage::GetHeaders {
                                     locator,
@@ -235,7 +257,7 @@ impl Node {
                             }
                         }
                         SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                            warn!("👋 Disconnected from {}", peer_id);
+                            warn!("Disconnected from {}", peer_id);
                         }
                         SwarmEvent::Behaviour(BudlumBehaviourEvent::Ping(event)) => {
                         }
@@ -252,7 +274,7 @@ impl Node {
                                 }
                                 mdns::Event::Expired(peers) => {
                                     for (peer_id, _) in peers {
-                                        info!("⏰ mDNS expired: {}", peer_id);
+                                        info!("mDNS expired: {}", peer_id);
                                         self.swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer_id);
                                     }
                                 }

@@ -37,7 +37,7 @@ impl Blockchain {
                 if !c.is_empty() {
                     chain_vec = c;
                     loaded_chain = true;
-                    println!("📚 Loaded chain from DB: {} blocks", chain_vec.len());
+                    println!("Loaded chain from DB: {} blocks", chain_vec.len());
                 }
             }
         }
@@ -317,6 +317,29 @@ impl Blockchain {
 
         for tx in self.chain.last().unwrap().transactions.iter() {
             self.mempool.remove_transaction(&tx.hash);
+        }
+
+        if let Some(ref pruning_manager) = self.pruning_manager {
+            let last_block = self.chain.last().unwrap();
+            let height = last_block.index;
+            if pruning_manager.should_create_snapshot(height) {
+                let snapshot = crate::snapshot::StateSnapshot::from_state(height, last_block.hash.clone(), self.chain_id, &self.state);
+                if let Err(e) = pruning_manager.save_snapshot(&snapshot) {
+                    println!("Failed to save snapshot at height {}: {}", height, e);
+                } else {
+                    println!("Saved state snapshot at height {}", height);
+                    
+                    let prunable = pruning_manager.get_prunable_blocks(self.chain.len() as u64, height);
+                    if !prunable.is_empty() {
+                        if let Some(ref store) = self.storage {
+                            for block_index in &prunable {
+                                let _ = store.delete_block(*block_index);
+                            }
+                            println!("Pruned {} old blocks from disk", prunable.len());
+                        }
+                    }
+                }
+            }
         }
 
         Ok(())

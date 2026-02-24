@@ -110,7 +110,7 @@ impl PruningManager {
             .map_err(|e| format!("Failed to serialize snapshot: {}", e))?;
         fs::write(&path, data).map_err(|e| format!("Failed to write snapshot: {}", e))?;
         println!(
-            "📸 Snapshot saved: {} ({} accounts)",
+            "Snapshot saved: {} ({} accounts)",
             path.display(),
             snapshot.balances.len()
         );
@@ -146,7 +146,7 @@ impl PruningManager {
         if !snapshot.verify() {
             return Err("Snapshot integrity check failed".to_string());
         }
-        println!("📸 Loaded snapshot at height {}", snapshot.height);
+        println!("Loaded snapshot at height {}", snapshot.height);
         Ok(Some(snapshot))
     }
 }

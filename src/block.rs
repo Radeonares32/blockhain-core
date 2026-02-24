@@ -42,10 +42,11 @@ impl BlockHeader {
             .as_ref()
             .map(|p| p.as_bytes().to_vec())
             .unwrap_or_default();
+            
         let evidence_bytes = self
             .slashing_evidence
             .as_ref()
-            .map(|e| serde_json::to_vec(e).unwrap_or_default())
+            .map(|e| bincode::serialize(e).unwrap_or_default())
             .unwrap_or_default();
 
         hash_fields(&[

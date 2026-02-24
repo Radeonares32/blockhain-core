@@ -108,6 +108,33 @@ impl AccountState {
         }
         state
     }
+    pub fn state_root(&self) -> String {
+        #[derive(Serialize)]
+        struct CanonicalStateV1<'a> {
+            version: u8,
+            accounts: std::collections::BTreeMap<&'a String, &'a Account>,
+            validators: std::collections::BTreeMap<&'a String, &'a Validator>,
+            unbonding_queue: &'a Vec<UnbondingEntry>,
+            epoch_index: u64,
+            last_epoch_time: u64,
+        }
+
+        let canonical = CanonicalStateV1 {
+            version: 1,
+            accounts: self.accounts.iter().collect(),
+            validators: self.validators.iter().collect(),
+            unbonding_queue: &self.unbonding_queue,
+            epoch_index: self.epoch_index,
+            last_epoch_time: self.last_epoch_time,
+        };
+
+        let bytes = bincode::serialize(&canonical).unwrap_or_default();
+        
+        let mut prefix_bytes = b"BDLM_STATE_V1".to_vec();
+        prefix_bytes.extend(bytes);
+        
+        crate::hash::calculate_hash(&prefix_bytes)
+    }
     pub fn init_genesis(&mut self, genesis_pubkey: &str) {
         let account = Account::with_balance(genesis_pubkey.to_string(), GENESIS_BALANCE);
         self.accounts.insert(genesis_pubkey.to_string(), account);
@@ -268,7 +295,7 @@ impl AccountState {
 
         for (addr, validator) in self.validators.iter_mut() {
             if validator.jailed && validator.jail_until <= current_time_sec {
-                println!("🔓 Validator {} released from jail", addr);
+                println!("Validator {} released from jail", addr);
                 validator.jailed = false;
                 if validator.stake > 0 {
                     validator.active = true;

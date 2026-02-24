@@ -47,6 +47,18 @@ impl Storage {
             Ok(0)
         }
     }
+
+    pub fn delete_block(&self, height: u64) -> std::io::Result<()> {
+        let key = format!("HEIGHT:{}", height);
+        if let Some(hash_val) = self.db.get(key.as_bytes())? {
+            self.db.remove(&hash_val)?;
+            self.db.remove(key.as_bytes())?;
+            let state_root_key = format!("STATE_ROOT:{}", height);
+            self.db.remove(state_root_key.as_bytes())?;
+            self.db.flush()?;
+        }
+        Ok(())
+    }
     pub fn save_canonical_height(&self, height: u64) -> std::io::Result<()> {
         self.db.insert("CANONICAL_HEIGHT", height.to_string().as_bytes())?;
         self.db.flush()?;

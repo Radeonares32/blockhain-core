@@ -99,6 +99,38 @@ pub fn report_invalid_block(&mut self, peer_id: &PeerId) {
 }
 ```
 
+---
+
+## 3. Ceza Süresinin Dolması (Ban Cleanup)
+
+Ağdaki Düğüm, kalıcı olarak düşman ilan edilmez. Belirli bir süre sonra (örneğin 24 saat), cezası dolan düğümler yeniden ağa katılma şansına sahip olmalıdır.
+
+Arka planda (Background Worker) çalışan Node döngüsü, her 60 saniyede bir aşağıdakini çağırır:
+
+```rust
+pub fn cleanup_expired_bans(&mut self) {
+    let now = Instant::now();
+    let old_count = self.peers.len();
+    
+    // Yasak süresi (banned_until) dolan hesapları tespit edip haritadan (Hashmap) kalıcı olarak sil.
+    self.peers.retain(|_, score| {
+        if let Some(ban_until) = score.banned_until {
+            ban_until > now
+        } else {
+            true // Yasaklı olmayanlar kalıyor
+        }
+    });
+
+    let removed = old_count - self.peers.len();
+    if removed > 0 {
+        info!("🧹 Temizlenen süresi dolmuş peer yasakları: {}", removed);
+    }
+}
+```
+
+Bu sayede hem hak ihlali süreleri dolanlar affedilir, hem de `PeerManager` belleğinde yer alan gereksiz "ölü IP listesi" temizlenerek RAM tasarrufu sağlanır.
+
+
 ### Fonksiyon: `ban_peer` (Yasaklama)
 
 ```rust

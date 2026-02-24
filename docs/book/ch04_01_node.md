@@ -61,14 +61,26 @@ Düğüm çalıştığı sürece (`run` fonksiyonu), hiç durmayan bir döngü i
 
 ```rust
 pub async fn run(&mut self) {
+    let mut gc_interval = tokio::time::interval(Duration::from_secs(60));
+    let mut discovery_interval = tokio::time::interval(Duration::from_secs(300));
+    
     loop {
         tokio::select! {
-            // DURUM 1: Ağdan bir olay geldi (Dış dünya)
+            // DURUM 1: Arka Plan Bakım Görevleri (Background Maintenance)
+            _ = gc_interval.tick() => {
+                // Her 60 saniyede bir Mempool'daki süresi dolmuş işlemleri (TTL) sil 
+                // ve PeerManager'daki yasak süresi dolmuş eşlerin (Bans) engelini kaldır.
+            }
+            _ = discovery_interval.tick() => {
+                // Her 5 dakikada bir Kademlia DHT ağında yeni eşler (Peers) ara.
+            }
+
+            // DURUM 2: Ağdan bir olay geldi (Dış dünya)
             event = self.swarm.select_next_some() => {
                 self.handle_network_event(event).await;
             }
 
-            // DURUM 2: İçerden bir komut geldi (İç dünya)
+            // DURUM 3: İçerden bir komut geldi (İç dünya)
             command = self.command_rx.recv() => {
                 if let Some(cmd) = command {
                     self.handle_command(cmd).await;
@@ -80,8 +92,9 @@ pub async fn run(&mut self) {
 ```
 
 **Analiz: `tokio::select!`**
-Bu makro, Go dilindeki `select` gibidir. İki asenkron işlemden hangisi **önce** gerçekleşirse onu çalıştırır.
+Bu makro, Go dilindeki `select` gibidir. Birden fazla asenkron işlemden hangisi **önce** gerçekleşirse onu çalıştırır.
 -   Eğer ağdan veri geldiyse, onu işler.
+-   Eğer ağ sessizse ama 60 saniye dolduysa, çöp toplayıcı (GC) görevlerini tetikler.
 -   Eğer ağ sessizse ama kullanıcı "Blok üret" dediyse, onu işler.
 -   Hiçbir şey yoksa, işlemciyi uyutur (Idle). Enerji tasarrufu sağlar.
 

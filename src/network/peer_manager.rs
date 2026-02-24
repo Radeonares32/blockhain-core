@@ -132,7 +132,7 @@ impl PeerManager {
     pub fn ban_peer(&mut self, peer_id: &PeerId) {
         let score = self.get_or_create(peer_id);
         score.banned_until = Some(Instant::now() + BAN_DURATION);
-        println!("🚫 Peer {} banned for {:?}", peer_id, BAN_DURATION);
+        println!("Peer {} banned for {:?}", peer_id, BAN_DURATION);
     }
     pub fn is_banned(&self, peer_id: &PeerId) -> bool {
         self.peers

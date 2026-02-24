@@ -114,6 +114,9 @@ The Budlum blockchain has undergone massive security sweeping and optimization p
 - **Strict Network Isolation**: Nodes executing handshakes enforce `chain_id` checks immediately. Peers with mismatches are instantly banned from communicating to drop cross-chain pollution.
 - **Genesis Spoofing Ban**: Any transaction arriving into the mempool, or network block >0 proposing a transaction acting as `from: "genesis"`, is strictly rejected prior to propagation.
 - **Universal Transaction Validation**: Signatures are evaluated at every touchpoint before advancing into execution arrays.
+- **Deterministic Serialization**: Migrated from `serde_json` to `bincode` for state root hashing and slashing evidence to guarantee deterministic byte mappings. Integrated `prost`-based Protobuf schemas for all P2P network payloads, cleanly separating codegen variants from core Rust models.
+- **Background Maintenance Workers**: Features automated background asynchronous loops ticking via `tokio::time::interval`, running Mempool Garbage Collection (TTL-based expiration), Peer Manager expired ban cleanup, and continuous Kademlia DHT peer discovery (bootstrap loops) to ensure memory health.
+- **Automated Disk Pruning**: Nodes evaluate snapshot policies continuously. After a state snapshot is securely written to disk, `sled::Db` purges stale block data existing beneath the maximum reorg safety margin to permanently prevent SSD exhaustion over long node uptimes.
 
 ---
 
