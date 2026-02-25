@@ -67,6 +67,10 @@ pub struct NodeConfig {
     pub dial: Option<String>,
     #[arg(long, default_value = "1337")]
     pub chain_id: u64,
+    #[arg(long)]
+    pub validator_key_file: Option<String>,
+    #[arg(long)]
+    pub gen_key: Option<String>,
 }
 impl NodeConfig {
     pub fn load_validators(&self) -> Vec<String> {
