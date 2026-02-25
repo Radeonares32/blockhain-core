@@ -21,6 +21,9 @@ pub struct PeerScore {
     pub last_seen: Option<Instant>,
     pub rate_tokens: f64,
     pub rate_last_refill: Instant,
+    pub vote_tokens: f64,
+    pub blob_tokens: f64,
+    pub handshaked: bool,
 }
 impl Default for PeerScore {
     fn default() -> Self {
@@ -33,6 +36,9 @@ impl Default for PeerScore {
             last_seen: None,
             rate_tokens: MAX_MSG_BURST,
             rate_last_refill: Instant::now(),
+            vote_tokens: 10.0,
+            blob_tokens: 5.0,
+            handshaked: false,
         }
     }
 }
@@ -50,7 +56,13 @@ impl PeerScore {
     pub fn refill_tokens(&mut self) {
         let now = Instant::now();
         let elapsed = now.duration_since(self.rate_last_refill).as_secs_f64();
+
         self.rate_tokens = (self.rate_tokens + elapsed * MSG_REFILL_RATE).min(MAX_MSG_BURST);
+
+        self.vote_tokens = (self.vote_tokens + elapsed * 2.0).min(20.0);
+
+        self.blob_tokens = (self.blob_tokens + elapsed * 0.5).min(10.0);
+
         self.rate_last_refill = now;
     }
     pub fn consume_token(&mut self) -> bool {
@@ -97,6 +109,30 @@ impl PeerManager {
         }
         true
     }
+
+    pub fn check_vote_rate_limit(&mut self, peer_id: &PeerId) -> bool {
+        let score = self.get_or_create(peer_id);
+        score.refill_tokens();
+        if score.vote_tokens >= 1.0 {
+            score.vote_tokens -= 1.0;
+            true
+        } else {
+            score.score = (score.score - 1).max(MIN_SCORE);
+            false
+        }
+    }
+
+    pub fn check_blob_rate_limit(&mut self, peer_id: &PeerId) -> bool {
+        let score = self.get_or_create(peer_id);
+        score.refill_tokens();
+        if score.blob_tokens >= 1.0 {
+            score.blob_tokens -= 1.0;
+            true
+        } else {
+            score.score = (score.score - 5).max(MIN_SCORE);
+            false
+        }
+    }
     pub fn report_invalid_block(&mut self, peer_id: &PeerId) {
         let score = self.get_or_create(peer_id);
         score.invalid_blocks += 1;
@@ -123,6 +159,14 @@ impl PeerManager {
             self.ban_peer(peer_id);
         }
     }
+    pub fn report_bad_behavior(&mut self, peer_id: &PeerId) {
+        let score = self.get_or_create(peer_id);
+        score.score = (score.score - 10).max(MIN_SCORE);
+        score.last_seen = Some(Instant::now());
+        if score.score <= BAN_THRESHOLD {
+            self.ban_peer(peer_id);
+        }
+    }
     pub fn report_good_behavior(&mut self, peer_id: &PeerId) {
         let score = self.get_or_create(peer_id);
         score.valid_contributions += 1;
@@ -142,6 +186,16 @@ impl PeerManager {
     }
     pub fn get_score(&self, peer_id: &PeerId) -> i32 {
         self.peers.get(peer_id).map(|s| s.score).unwrap_or(0)
+    }
+    pub fn is_handshaked(&self, peer_id: &PeerId) -> bool {
+        self.peers
+            .get(peer_id)
+            .map(|s| s.handshaked)
+            .unwrap_or(false)
+    }
+    pub fn set_handshaked(&mut self, peer_id: &PeerId, status: bool) {
+        let score = self.get_or_create(peer_id);
+        score.handshaked = status;
     }
     pub fn get_peer_info(&self, peer_id: &PeerId) -> Option<&PeerScore> {
         self.peers.get(peer_id)

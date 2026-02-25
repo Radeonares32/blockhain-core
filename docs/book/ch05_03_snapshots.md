@@ -30,6 +30,9 @@ pub struct Snapshot {
     pub state_root: String,      // O anki hesap durumunun özeti
     pub accounts: Vec<Account>,  // Tüm hesap bakiyeleri
     pub validators: Vec<Validator>, // O anki validatör listesi
+    // --- Hardening Phase 2: Finalite Farkındalığı ---
+    pub finalized_height: u64,   // Kesinleşmiş son yükseklik
+    pub finalized_hash: String,  // Kesinleşmiş son bloğun hash'i
 }
 ```
 
@@ -81,6 +84,8 @@ if let Some(ref pruning_manager) = self.pruning_manager {
         if !prunable.is_empty() {
             if let Some(ref store) = self.storage {
                 // 3. Blokları ve State eşlemelerini Hard Diskten tamamen sil (Pruning).
+                // DİKKAT: PruningManager, finalized_height'ın altındaki blokların 
+                // asla silinmemesini garanti eder.
                 for block_index in &prunable {
                     let _ = store.delete_block(*block_index);
                 }
@@ -89,6 +94,11 @@ if let Some(ref pruning_manager) = self.pruning_manager {
     }
 }
 ```
+
+**Neden Finalite Farkındalığı?**
+Eskiden sadece `min_blocks` (güvenlik tamponu) kullanılırken, artık **Finalized Checkpoint** asıl referans noktasıdır. Hiçbir budama işlemi, ağın %100 kesinlik verdiği (finalized) bir bloğu silecek kadar geri gidemez. Bu, veri bütünlüğü için en üst düzey sigortadır.
+
+---
 
 **Neden Güvenlik Marjı (Safety Margin)?**
 Zincirin en ucunda bazen çatallanmalar (Micro-forks) olur. Son 10-20 blok değişebilir. Eğer snapshot alır almaz hemen önceki blokları silersek ve zincir başka bir dala (Reorg) geçerse, verisiz kalırız ve düğüm çöker. Bu yüzden `PruningManager::new(min_blocks, ...)` ayarlandığında, her zaman bir miktar "tampon bölge" (buffer) bırakılır.

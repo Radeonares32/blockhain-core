@@ -21,11 +21,16 @@ pub struct PeerScore {
     pub rate_tokens: f64,          // Kalan mesaj hakkı (Token Bucket)
     pub rate_last_refill: Instant, // Jetonların (Token) son yenilenme zamanı
     pub last_seen: Option<Instant>,// Son görülme
+    pub handshaked: bool,          // Versiyon/Protokol doğrulaması yapıldı mı?
+    // --- Hardening Phase 2: Granüler Rate Limiting ---
+    pub vote_tokens: f64,          // Finalite oyları için kota
+    pub blob_tokens: f64,          // QC Blobları için kota
 }
 ```
 
 **Analiz:**
 -   `score` (`i32`): Negatif olabileceği için `i32` kullanıldı. Başlangıç puanı 0'dır (Nötr).
+-   `handshaked` (`bool`): **Handshake Gating** (Kapı Tutucu) mantığıdır. Bu değer `true` olmadan eşin attığı işlem veya blok paketleri açılmadan çöpe atılır (DoS Koruması).
 -   `banned_until`: `Option` tipindedir. Eğer `None` ise yasaklı değil demektir. Eğer zaman damgası varsa ve o tarih gelecekteyse, o eşten gelen her şey **çöpe atılır** (Drop).
 -   `rate_tokens` & `rate_last_refill`: "Token-Bucket" algoritmasının ana değişkenleri. Her bir peer'ın belirli bir mesaj kotası (örn. saniyede 5) vardır.
 
@@ -67,15 +72,21 @@ pub fn check_rate_limit(&mut self, peer_id: &PeerId) -> bool {
         .min(RATE_LIMIT_CAPACITY);
     score.rate_last_refill = now;
 
-    if score.rate_tokens >= 1.0 {
-        score.rate_tokens -= 1.0;
-        true // İzin verildi
     } else {
         // İzin reddedildi. Çok spam yapanı cezalandır.
         self.report_oversized_message(peer_id);
         false
     }
 }
+
+### Granüler Hız Sınırlama (Votes & Blobs)
+
+Her mesaj aynı ağırlıkta değildir. Karmaşık BLS oylamaları ve devasa QC Blobları için ağın özel koruma kalkanları (Dedicated Buckets) vardır.
+
+- **`check_vote_rate_limit`:** Finalite oyları (Prevote/Precommit) için kullanılır. Sahte oy spamı yaparak CPU'yu yormaya çalışanları engeller.
+- **`check_blob_rate_limit`:** MB'larca tutan QC Blobları için kullanılır. Bant genişliğini (Bandwidth) korumak için çok daha sıkı sınırlara sahiptir.
+
+**Tasarım Kararı:** Genel mesaj hakkı bitse bile, oylama hakkı (eğer dürüst bir validatör ise) devam edebilir. Bu, "Isolation of Concerns" (Sorumlulukların İzolasyonu) presibiyle ağın konsensüs güvenliğini korur.
 ```
 
 

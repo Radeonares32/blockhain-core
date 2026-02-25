@@ -3,6 +3,16 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const CHAIN_ID_MAINNET: u64 = 1;
 pub const CHAIN_ID_TESTNET: u64 = 42;
 pub const CHAIN_ID_DEVNET: u64 = 1337;
+
+pub const EPOCH_LEN: u64 = 100;
+pub const SLOT_MS: u64 = 1000;
+pub const FINALITY_CHECKPOINT_INTERVAL: u64 = 100;
+pub const FINALITY_QUORUM_NUMERATOR: u64 = 2;
+pub const FINALITY_QUORUM_DENOMINATOR: u64 = 3;
+pub const VRF_BASE_PROB: f64 = 1.0;
+pub const QC_BLOB_TTL_EPOCHS: u64 = 10;
+pub const MAX_QC_BLOB_BYTES: usize = 1_048_576;
+pub const MAX_VOTES_PER_MSG: usize = 128;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ChainId(pub u64);
 impl ChainId {

@@ -1,6 +1,7 @@
 mod account;
 mod block;
 mod blockchain;
+mod chain_config;
 mod cli;
 mod consensus;
 mod crypto;
@@ -9,6 +10,7 @@ mod genesis;
 mod hash;
 mod mempool;
 mod network;
+mod slashing;
 mod snapshot;
 mod storage;
 mod transaction;
@@ -32,6 +34,19 @@ async fn main() {
         .with_max_level(Level::INFO)
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+    
+    if let Some(ref path) = config.gen_key {
+        match crate::crypto::ValidatorKeys::generate() {
+            Ok(keys) => {
+                keys.save(path).expect("Failed to save key");
+                println!("Validator key generated and saved to: {}", path);
+                println!("Address: {}", keys.sig_key.public_key_hex());
+            }
+            Err(e) => eprintln!("Error generating key: {}", e),
+        }
+        return;
+    }
+
     println!("Budlum Node - v0.2.0 (Framework Edition)");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("Configuration:");
@@ -48,14 +63,28 @@ async fn main() {
         ConsensusType::PoS => {
             println!("PoS mode - min stake: {}", config.min_stake);
             let pos_config = crate::consensus::pos::PoSConfig {
-                 min_stake: config.min_stake,
-                 ..Default::default()
+                min_stake: config.min_stake,
+                ..Default::default()
             };
-            Arc::new(PoSEngine::new(pos_config, None))
+            let keys = if let Some(ref path) = config.validator_key_file {
+                match crate::crypto::ValidatorKeys::load(path) {
+                    Ok(k) => Some(k),
+                    Err(e) => {
+                        println!("Failed to load validator keys from {}: {}", path, e);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            Arc::new(PoSEngine::new(pos_config, keys))
         }
         ConsensusType::PoA => {
             println!("PoA mode");
-            Arc::new(PoAEngine::new(crate::consensus::poa::PoAConfig::default(), None))
+            Arc::new(PoAEngine::new(
+                crate::consensus::poa::PoAConfig::default(),
+                None,
+            ))
         }
     };
     let storage = match storage::Storage::new(&config.db_path) {
@@ -74,20 +103,41 @@ async fn main() {
         config.chain_id,
         Some(pruning_manager),
     )));
-    
+
+    if let Some(ref keys) = (match config.consensus {
+        ConsensusType::PoS => {
+           let mut bc = blockchain.lock().unwrap();
+           if let Some(ref v_path) = config.validator_key_file {
+               if let Ok(keys) = crate::crypto::ValidatorKeys::load(v_path) {
+                    let addr = keys.sig_key.public_key_hex();
+                    println!("Auto-bootstrapping validator: {}", addr);
+                    bc.state.add_balance(&addr, 1_000_000);
+                    let mut v = crate::account::Validator::new(addr.clone(), 100_000);
+                    v.active = true;
+                    v.vrf_public_key = keys.vrf_key.public.to_bytes().to_vec();
+                    bc.state.validators.insert(addr, v);
+                    Some(keys)
+               } else { None }
+           } else { None }
+        }
+        _ => None,
+    }) {
+       
+    }
+
     if let ConsensusType::PoA = config.consensus {
-         let validators = config.load_validators();
-         if !validators.is_empty() {
-             println!("Initializing PoA validators: {:?}", validators);
-             let mut bc = blockchain.lock().unwrap();
-             for addr in validators {
-                 let mut v = crate::account::Validator::new(addr.clone(), 0);
-                 v.active = true;
-                 bc.state.validators.insert(addr, v);
-             }
-         } else {
-             println!(" No validators configured!");
-         }
+        let validators = config.load_validators();
+        if !validators.is_empty() {
+            println!("Initializing PoA validators: {:?}", validators);
+            let mut bc = blockchain.lock().unwrap();
+            for addr in validators {
+                let mut v = crate::account::Validator::new(addr.clone(), 0);
+                v.active = true;
+                bc.state.validators.insert(addr, v);
+            }
+        } else {
+            println!(" No validators configured!");
+        }
     }
 
     let mut node = Node::new(blockchain.clone()).unwrap();
@@ -126,7 +176,12 @@ async fn main() {
                         }
                         "block" | "mine" => {
                             let mut chain = blockchain.lock().unwrap();
-                            chain.produce_block(peer_id.to_string());
+                            let producer = if let Some(addr) = &config.validator_address {
+                                addr.clone()
+                            } else {
+                                peer_id.to_string()
+                            };
+                            chain.produce_block(producer);
                         }
                         "chain" => {
                             let chain = blockchain.lock().unwrap();
@@ -154,7 +209,6 @@ async fn main() {
                         }
                         _ => {}
                     }
-
 
                 }
             }

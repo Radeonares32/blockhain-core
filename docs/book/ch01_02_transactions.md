@@ -76,6 +76,11 @@ pub struct Transaction {
 - İşlem Mempool'a eklenmek isteniyorsa `from == "genesis"` olanlar **ANINDA REDDEDİLİR**.
 - Ağdan p2p Blok geldiyse ve eğer bu blok 0. blok (sıfırıncı - gerçek Genesis) değilse, içindeki herhangi bir işlem "genesis" olduğunu iddia ediyorsa **BÜTÜN BLOK REDDEDİLİR**.
 
+### 2.3 Blok İçi Chain ID Doğrulaması
+
+Bloklar ağdan alındığında, `blockchain.rs` içindeki `validate_and_add_block` fonksiyonu her bir işlemi tek tek inceler.
+- Bloktaki herhangi bir işlemin `chain_id` değeri bloğun `chain_id` değerinden farklıysa (`tx.chain_id != block.chain_id`), **BLOK REDDEDİLİR**. Bu, testnet işlemlerinin mainnet bloğunun içine gömülerek validasyonun atlatılmasını engeller.
+
 ---
 
 ### Fonksiyon: `signing_hash` (İmzalanacak Veri)

@@ -9,6 +9,8 @@ pub struct StateSnapshot {
     pub created_at: u128,
     pub balances: HashMap<String, u64>,
     pub nonces: HashMap<String, u64>,
+    pub finalized_height: u64,
+    pub finalized_hash: String,
     pub snapshot_hash: String,
 }
 impl StateSnapshot {
@@ -17,6 +19,8 @@ impl StateSnapshot {
         block_hash: String,
         chain_id: u64,
         account_state: &AccountState,
+        finalized_height: u64,
+        finalized_hash: String,
     ) -> Self {
         let created_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -31,6 +35,8 @@ impl StateSnapshot {
             created_at,
             balances,
             nonces,
+            finalized_height,
+            finalized_hash,
             snapshot_hash: String::new(),
         };
         snapshot.snapshot_hash = snapshot.calculate_hash();
@@ -54,6 +60,8 @@ impl StateSnapshot {
             hasher.update(key.as_bytes());
             hasher.update(self.nonces[key].to_le_bytes());
         }
+        hasher.update(self.finalized_height.to_le_bytes());
+        hasher.update(self.finalized_hash.as_bytes());
         hex::encode(hasher.finalize())
     }
     pub fn verify(&self) -> bool {
@@ -86,12 +94,20 @@ impl PruningManager {
     pub fn should_create_snapshot(&self, height: u64) -> bool {
         height > 0 && height % self.snapshot_interval == 0
     }
-    pub fn get_prunable_blocks(&self, chain_length: u64, latest_snapshot_height: u64) -> Vec<u64> {
+    pub fn get_prunable_blocks(
+        &self,
+        chain_length: u64,
+        latest_snapshot_height: u64,
+        finalized_height: u64,
+    ) -> Vec<u64> {
         if chain_length <= self.min_blocks_to_keep {
             return vec![];
         }
         let prune_up_to = chain_length.saturating_sub(self.min_blocks_to_keep);
-        let safe_prune_up_to = prune_up_to.min(latest_snapshot_height);
+
+        let safe_prune_up_to = prune_up_to
+            .min(latest_snapshot_height)
+            .min(finalized_height);
         if safe_prune_up_to == 0 {
             return vec![];
         }
@@ -156,8 +172,14 @@ mod tests {
     #[test]
     fn test_snapshot_creation() {
         let account_state = AccountState::new();
-        let snapshot =
-            StateSnapshot::from_state(100, "blockhash123".to_string(), 1337, &account_state);
+        let snapshot = StateSnapshot::from_state(
+            100,
+            "blockhash123".to_string(),
+            1337,
+            &account_state,
+            0,
+            "genhash".to_string(),
+        );
         assert_eq!(snapshot.height, 100);
         assert_eq!(snapshot.chain_id, 1337);
         assert!(!snapshot.snapshot_hash.is_empty());
@@ -165,15 +187,24 @@ mod tests {
     #[test]
     fn test_snapshot_verify() {
         let account_state = AccountState::new();
-        let snapshot = StateSnapshot::from_state(50, "hash".to_string(), 42, &account_state);
+        let snapshot = StateSnapshot::from_state(
+            50,
+            "hash".to_string(),
+            42,
+            &account_state,
+            10,
+            "finalhash".to_string(),
+        );
         assert!(snapshot.verify());
     }
     #[test]
     fn test_pruning_manager() {
         let manager = PruningManager::new(100, 1000, "./snapshots".to_string());
-        let prunable = manager.get_prunable_blocks(50, 0);
+
+        let prunable = manager.get_prunable_blocks(50, 0, 0);
         assert!(prunable.is_empty());
-        let prunable = manager.get_prunable_blocks(200, 50);
+
+        let prunable = manager.get_prunable_blocks(200, 50, 50);
         assert_eq!(prunable.len(), 49);
     }
     #[test]

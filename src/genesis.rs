@@ -65,11 +65,15 @@ impl GenesisConfig {
             nonce: 0,
             producer: None,
             signature: None,
-            stake_proof: None,
             chain_id: self.chain_id,
             slashing_evidence: None,
             state_root: String::new(),
             tx_root: String::new(),
+            epoch: 0,
+            slot: 0,
+            vrf_output: Vec::new(),
+            vrf_proof: Vec::new(),
+            validator_set_hash: String::new(),
         };
 
         block.tx_root = block.calculate_tx_root();

@@ -140,6 +140,15 @@ Blockchain'de hesap açmak için bankaya gidilmez. Biri size para yolladığınd
 
 ---
 
+### Fonksiyon: `apply_block` (Blok Seviyesi State Determinism)
+
+`apply_transaction` sadece tek bir işlemi uygularken, `apply_block` koca bir bloğun tüm işlemlerini sırayla işleterek state'i (bakiye durumunu) bir sonraki evreye geçirir.
+
+**Güvenlik ve Determinism Kuralı:** Mainnet Hardening kapsamında, bu fonksiyon artık **hataları yutmaz**. `apply_block` işlemi bir `Result<(), String>` döner. Eğer blok içindeki tek bir işlem dahi (yetersiz bakiye veya hatalı nonce sebebiyle) `apply_transaction` aşamasında başarısız olursa, blok anında reddedilir ve süreç iptal edilir.
+Ayrıca node ilk başlatılırken (`init` süreci) diskten okunan eski bloklar `apply_block` ile state'e uygulanırken bir hata alınırsa, node sessizce bozuk state ile ayağa kalkmak yerine **`std::process::exit(1)` ile kontrollü bir şekilde çöker (hard fail)**. Bu sayede veritabanı tutarsızlığı önlenir.
+
+---
+
 ### Fonksiyon: `apply_slashing` (Adalet Dağıtımı)
 
 Konsensüs motoru (PoS) bir suç tespit ettiğinde bu fonksiyonu çağırır.

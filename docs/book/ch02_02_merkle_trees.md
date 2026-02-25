@@ -93,3 +93,31 @@ Bir cep telefonu cüzdanı (SPV Wallet) nasıl çalışır?
     -   Eğer `Hesaplanan_Root == Header.tx_root` ise, işlem %100 buradadır.
 
 Bu sayede 1 TB'lık blok zincirini indirmeden, işlemler kriptografik kesinlikle doğrulanabilir.
+
+---
+
+## 4. Hardening Phase 2: QC Blob ve PQ İmzaları
+
+Yeni eklenen Optimistic QC (Optimistik Çeyrek Sertifika) yapısında, Merkle ağaçları bu sefer kuantum sonrası (PQ) güvenliği optimize etmek için kullanılır.
+
+### Problem: Devasa İmzalar
+Dilithium imzaları Ed25519'dan kat kat daha büyüktür (birkaç KB). Eğer her validatörün PQ imzasını blok içine koysaydık, her blok MB'larca boyutunda olurdu.
+
+### Çözüm: İmza Merkle Ağacı
+Budlum, bu imzaları blok dışındaki `QcBlob` içinde Merkle ağacı yapısıyla saklar:
+1. Her validatörün Dilithium imzası bir yapraktır (Leaf).
+2. Bu imzalar bir ağaç oluşturur.
+3. Ağacın kök hash'i (Root), blok başlığına eklenir.
+
+**Neden Bu Yapıyı Seçtik?**
+- **Optimistic Doğrulama:** Full nodelar bloğu hemen kabul eder. Eğer `QcBlob` içindeki bir PQ imzasının hatalı olduğu iddia edilirse, sadece o imza ve Merkle yolu (Path) kullanılarak **Fraud Proof** (Sahtecilik Kanıtı) sunulur.
+- **Düşük Depolama:** Ana zincir şişmez; sadece kuantum saldırısı riski doğduğunda bu kanıtlar önem kazanır.
+
+---
+
+## Özet
+
+Merkle Ağaçları, Budlum projesinde sadece veri bütünlüğü değil, aynı zamanda **hız (Light Client)** ve **gelecek güvenliği (PQ Optimization)** sağlar.
+1.  **İşlemler:** `tx_root` ile kanıtlanır.
+2.  **Hesaplar:** `state_root` ile anlık bakiye doğrulanır.
+3.  **PQ Güvenlik:** `QcBlob` kökü ile devasa imzalar yönetilebilir hale gelir.

@@ -27,6 +27,13 @@ pub struct BlockHeader {
     pub tx_root: String,
     pub slashing_evidence: Option<Vec<SlashingEvidence>>,
     pub nonce: u64,
+    // --- Hardening Phase 2: VRF & Finalite ---
+    pub epoch: u64,
+    pub slot: u64,
+    pub proposer_pubkey: Option<String>,
+    pub vrf_output: Vec<u8>,
+    pub vrf_proof: Vec<u8>,
+    pub validator_set_hash: String,
 }
 ```
 
@@ -44,6 +51,11 @@ pub struct BlockHeader {
 | `tx_root` | `String` | 32-byte Hex Hash. | **İşlem Özeti.** Bloktaki tüm işlemlerin Merkle köküdür. Blok içindeki işlemlerin değiştirilemezliğini sağlar. |
 | `slashing_evidence` | `Option<Vec>` | Opsiyonel Liste. Her blokta ceza olmak zorunda değil. | **Suç Kanıtları (PoS).** Kötü niyetli validatörlerin (çift imza atanların) kanıtlarını taşır. Bu kanıtlar blokta yer alırsa, o validatörler cezalandırılır. |
 | `nonce` | `u64` | Dönüştürelebilir sayı. | **İş Kanıtı Sayacı (PoW).** Madencilerin hedef hash'i tutturmak için sürekli değiştirdiği deneme sayısıdır. PoS modunda 0 olabilir. |
+| `epoch` | `u64` | Periyodik döngü sayısı. | **Dönem Bilgisi.** Validatör setinin ve lider seçim tohumunun (seed) güncellendiği zaman dilimidir. |
+| `slot` | `u64` | Zaman dilimi indeksi. | **Slot Numarası.** Belirli bir epoch içindeki zaman dilimi. Her slotta bir lider blok üretme hakkına sahiptir. |
+| `vrf_output` | `Vec<u8>` | Kriptografik rastgele çıktı. | **Piyango Çıktısı.** Liderin seçildiğini kanıtlayan deterministik ancak tahmin edilemez rastgele değer. |
+| `vrf_proof` | `Vec<u8>` | VRF kanıtı. | **Doğrulama Kanıtı.** Diğer düğümlerin, VRF çıktısının doğru üretildiğini kontrol etmesini sağlar. |
+| `validator_set_hash`| `String` | 32-byte Hex Hash. | **Validatör Seti Özeti.** Bloğun üretildiği andaki aktif validatörlerin özetidir. Finalite katmanı için kritik bir referanstır. |
 
 ---
 
@@ -57,7 +69,6 @@ pub struct Block {
     // ... Header alanlarının aynısı (index, timestamp, vb.) ...
     pub transactions: Vec<Transaction>,
     pub signature: Option<Vec<u8>>,
-    pub stake_proof: Option<Vec<u8>>,
 }
 ```
 
@@ -67,7 +78,6 @@ pub struct Block {
 | :--- | :--- | :--- |
 | `transactions` | `Vec<Transaction>` | **İşlem Listesi.** Para transferleri, kontrat çağrıları vb. Bloğun "yükü" (payload) burasıdır. Diskte yer kaplayan asıl kısım budur. |
 | `signature` | `Option<Vec<u8>>` | **Üretici İmzası.** `producer` alanındaki kişinin bu bloğu gerçekten onayladığını kanıtlayan Ed25519 imzası. Olmazsa, herkes başkasının adına blok üretebilirdi. |
-| `stake_proof` | `Option<Vec<u8>>` | **Hisse Kanıtı (PoS).** Validatörün o slot (zaman dilimi) için seçildiğini kanıtlayan VRF benzeri kriptografik kanıt. |
 
 ---
 
@@ -82,7 +92,10 @@ pub fn calculate_hash(&self) -> String {
     // 1. Önce opsiyonel alanları byte dizisine çevir (Serialization)
     let producer_bytes = self.producer.as_ref().map(...).unwrap_or_default();
     
-    // 2. hash_fields fonksiyonuna tüm verileri sırayla besle
+    // 2. slashing_evidence için bincode kullanarak deterministik serileştirme yap
+    let evidence_bytes = self.slashing_evidence.as_ref().map(|e| bincode::serialize(e).unwrap_or_default()).unwrap_or_default();
+    
+    // 3. hash_fields fonksiyonuna tüm verileri sırayla besle
     hash_fields(&[
         b"BDLM_BLOCK_V2",              // <--- Domain Separation Tag
         &self.index.to_le_bytes(),     // Sayıları byte'a çevir (Little Endian)
@@ -90,15 +103,20 @@ pub fn calculate_hash(&self) -> String {
         self.previous_hash.as_bytes(),
         self.tx_root.as_bytes(),
         &self.nonce.to_le_bytes(),
-        // ... diğer alanlar ...
+        // VRF & Epoch Alanları (Deterministik Hash için)
+        &self.epoch.to_le_bytes(),
+        &self.slot.to_le_bytes(),
+        &self.vrf_output,
+        self.validator_set_hash.as_bytes(),
     ])
 }
 ```
 
 **Neden Böyle Yazdık?**
 1.  **Domain Separation (`b"BDLM_BLOCK_V2"`):** Bu sabit metin (magic bytes), farklı veri tiplerinin (Transaction ve Block) hashlerinin karışmasını engeller. Eğer bir işlem verisi tesadüfen bir blok verisine benzerse, hashleri aynı çıkmaz çünkü blok hashlerken başına bu etiketi ekliyoruz. Bu profesyonel bir güvenlik standardıdır.
-2.  **Little Endian (`to_le_bytes`):** Farklı işlemci mimarilerinde (Intel vs ARM) sayıların bellekte tutulma sırası farklıdır. Ağda herkesin aynı hash'i bulması için sayıları standart bir formata (Little Endian) zorlarız.
-3.  **Tüm Alanlar:** Hash'e *her şeyi* dahil ederiz (nonce, timestamp, rootlar). Böylece bloktaki en ufak bir virgül değişse, hash tamamen değişir (Avalanche Effect).
+2.  **Deterministik Serileştirme (`bincode`):** Özellikle `slashing_evidence` gibi karmaşık liste yapılarını baytlara çevirirken, `serde_json` gibi veri sıralamasını değiştirebilecek formatlar yerine doğrudan makine dostu `bincode` kullanılarak network split (hash uyuşmazlığı) sorunları engellenir.
+3.  **Little Endian (`to_le_bytes`):** Farklı işlemci mimarilerinde (Intel vs ARM) sayıların bellekte tutulma sırası farklıdır. Ağda herkesin aynı hash'i bulması için sayıları standart bir formata (Little Endian) zorlarız.
+4.  **Tüm Alanlar:** Hash'e *her şeyi* dahil ederiz (nonce, timestamp, rootlar). Böylece bloktaki en ufak bir virgül değişse, hash tamamen değişir (Avalanche Effect).
 
 ---
 

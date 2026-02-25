@@ -41,7 +41,10 @@ impl PoWEngine {
         }
     }
     pub fn get_difficulty(&self) -> usize {
-        *self.current_difficulty.read().unwrap_or_else(|e| e.into_inner())
+        *self
+            .current_difficulty
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
     }
     fn target(&self) -> String {
         "0".repeat(self.get_difficulty())

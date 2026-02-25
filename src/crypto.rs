@@ -29,6 +29,49 @@ impl std::error::Error for CryptoError {}
 pub struct KeyPair {
     signing_key: SigningKey,
 }
+
+use schnorrkel::{
+    vrf::{VRFInOut, VRFProof},
+    Keypair as SchnorrkelKeypair, PublicKey as SchnorrkelPublicKey,
+    Signature as SchnorrkelSignature,
+};
+
+#[derive(Clone)]
+pub struct ValidatorKeys {
+    pub sig_key: KeyPair,
+    pub vrf_key: SchnorrkelKeypair,
+}
+
+impl ValidatorKeys {
+    pub fn generate() -> Result<Self, CryptoError> {
+        let sig_key = KeyPair::generate()?;
+        let mut csprng = rand_core::OsRng;
+        let vrf_key = SchnorrkelKeypair::generate_with(&mut csprng);
+        Ok(ValidatorKeys { sig_key, vrf_key })
+    }
+    pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), CryptoError> {
+        let mut bytes = self.sig_key.signing_key.as_bytes().to_vec();
+        bytes.extend_from_slice(&self.vrf_key.to_bytes());
+        std::fs::write(path.as_ref(), bytes).map_err(|e| CryptoError::Io(e.to_string()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            let _ = std::fs::set_permissions(path.as_ref(), perms);
+        }
+        Ok(())
+    }
+    pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, CryptoError> {
+        let bytes = std::fs::read(path.as_ref()).map_err(|e| CryptoError::Io(e.to_string()))?;
+        if bytes.len() < 128 {
+            return Err(CryptoError::InvalidKey("Key file too short".into()));
+        }
+        let sig_key = KeyPair::from_bytes(&bytes[0..32])?;
+        let vrf_key = SchnorrkelKeypair::from_bytes(&bytes[32..128])
+            .map_err(|e| CryptoError::InvalidKey(e.to_string()))?;
+        Ok(ValidatorKeys { sig_key, vrf_key })
+    }
+}
 impl KeyPair {
     pub fn generate() -> Result<Self, CryptoError> {
         let mut seed = [0u8; SECRET_KEY_LENGTH];

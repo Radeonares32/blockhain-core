@@ -18,6 +18,11 @@ pub struct BlockHeader {
     pub tx_root: String,
     pub slashing_evidence: Option<Vec<SlashingEvidence>>,
     pub nonce: u64,
+    pub epoch: u64,
+    pub slot: u64,
+    pub vrf_output: Vec<u8>,
+    pub vrf_proof: Vec<u8>,
+    pub validator_set_hash: String,
 }
 
 impl BlockHeader {
@@ -33,6 +38,11 @@ impl BlockHeader {
             tx_root: block.tx_root.clone(),
             slashing_evidence: block.slashing_evidence.clone(),
             nonce: block.nonce,
+            epoch: block.epoch,
+            slot: block.slot,
+            vrf_output: block.vrf_output.clone(),
+            vrf_proof: block.vrf_proof.clone(),
+            validator_set_hash: block.validator_set_hash.clone(),
         }
     }
 
@@ -42,7 +52,7 @@ impl BlockHeader {
             .as_ref()
             .map(|p| p.as_bytes().to_vec())
             .unwrap_or_default();
-            
+
         let evidence_bytes = self
             .slashing_evidence
             .as_ref()
@@ -60,6 +70,11 @@ impl BlockHeader {
             &evidence_bytes,
             &self.chain_id.to_le_bytes(),
             self.state_root.as_bytes(),
+            &self.epoch.to_le_bytes(),
+            &self.slot.to_le_bytes(),
+            &self.vrf_output,
+            &self.vrf_proof,
+            self.validator_set_hash.as_bytes(),
         ])
     }
 
@@ -90,11 +105,15 @@ pub struct Block {
     pub nonce: u64,
     pub producer: Option<String>,
     pub signature: Option<Vec<u8>>,
-    pub stake_proof: Option<Vec<u8>>,
     pub chain_id: u64,
     pub slashing_evidence: Option<Vec<SlashingEvidence>>,
     pub state_root: String,
     pub tx_root: String,
+    pub epoch: u64,
+    pub slot: u64,
+    pub vrf_output: Vec<u8>,
+    pub vrf_proof: Vec<u8>,
+    pub validator_set_hash: String,
 }
 
 impl Block {
@@ -122,11 +141,15 @@ impl Block {
             nonce: 0,
             producer: None,
             signature: None,
-            stake_proof: None,
             chain_id,
             slashing_evidence: None,
             state_root: String::new(),
             tx_root: String::new(),
+            epoch: 0,
+            slot: 0,
+            vrf_output: Vec::new(),
+            vrf_proof: Vec::new(),
+            validator_set_hash: String::new(),
         };
         block.tx_root = block.calculate_tx_root();
         block.hash = block.calculate_hash();
@@ -172,7 +195,7 @@ impl Block {
         let evidence_bytes = self
             .slashing_evidence
             .as_ref()
-            .map(|e| serde_json::to_vec(e).unwrap_or_default())
+            .map(|e| bincode::serialize(e).unwrap_or_default())
             .unwrap_or_default();
 
         hash_fields(&[
@@ -186,6 +209,11 @@ impl Block {
             &evidence_bytes,
             &self.chain_id.to_le_bytes(),
             self.state_root.as_bytes(),
+            &self.epoch.to_le_bytes(),
+            &self.slot.to_le_bytes(),
+            &self.vrf_output,
+            &self.vrf_proof,
+            self.validator_set_hash.as_bytes(),
         ])
     }
     pub fn sign(&mut self, keypair: &KeyPair) {
@@ -247,9 +275,6 @@ impl Block {
             return false;
         }
         self.verify_signature()
-    }
-    pub fn add_stake_proof(&mut self, proof: Vec<u8>) {
-        self.stake_proof = Some(proof);
     }
     pub fn mine(&mut self, difficulty: usize) {
         let target = "0".repeat(difficulty);
