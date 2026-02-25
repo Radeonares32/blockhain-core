@@ -29,6 +29,27 @@ impl std::error::Error for CryptoError {}
 pub struct KeyPair {
     signing_key: SigningKey,
 }
+
+use schnorrkel::{
+    vrf::{VRFInOut, VRFProof},
+    Keypair as SchnorrkelKeypair, PublicKey as SchnorrkelPublicKey,
+    Signature as SchnorrkelSignature,
+};
+
+#[derive(Clone)]
+pub struct ValidatorKeys {
+    pub sig_key: KeyPair,
+    pub vrf_key: SchnorrkelKeypair,
+}
+
+impl ValidatorKeys {
+    pub fn generate() -> Result<Self, CryptoError> {
+        let sig_key = KeyPair::generate()?;
+        let mut csprng = rand_core::OsRng;
+        let vrf_key = SchnorrkelKeypair::generate_with(&mut csprng);
+        Ok(ValidatorKeys { sig_key, vrf_key })
+    }
+}
 impl KeyPair {
     pub fn generate() -> Result<Self, CryptoError> {
         let mut seed = [0u8; SECRET_KEY_LENGTH];

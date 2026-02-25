@@ -4,7 +4,7 @@ mod integration_tests {
     use crate::block::Block;
     use crate::blockchain::Blockchain;
     use crate::consensus::poa::PoAConfig;
-    use crate::consensus::pos::PoSConfig; 
+    use crate::consensus::pos::PoSConfig;
     use crate::consensus::{ConsensusEngine, PoAEngine, PoSEngine, PoWEngine};
     use crate::crypto::KeyPair;
     use crate::transaction::Transaction;
@@ -22,7 +22,6 @@ mod integration_tests {
         );
         state.validators.get_mut(&validator_pubkey).unwrap().active = true;
 
-        
         let config = PoAConfig::default();
         let engine = PoAEngine::new(config, Some(keypair));
         let mut block = Block::new(1, "0".repeat(64), vec![]);
@@ -58,7 +57,8 @@ mod integration_tests {
 
     #[test]
     fn test_pos_requires_signature() {
-        let keypair = KeyPair::generate().unwrap();
+        let keys = crate::crypto::ValidatorKeys::generate().unwrap();
+        let keypair = keys.sig_key.clone();
         let validator_pubkey = keypair.public_key_hex();
 
         let mut state = AccountState::new();
@@ -71,7 +71,7 @@ mod integration_tests {
             min_stake: 100,
             ..Default::default()
         };
-        let engine = PoSEngine::new(config, Some(keypair));
+        let engine = PoSEngine::new(config, Some(keys));
 
         let mut block = Block::new(1, "0".repeat(64), vec![]);
         block.producer = Some(validator_pubkey);
@@ -160,7 +160,7 @@ mod integration_tests {
 
         let mut tx = Transaction::new(pubkey.clone(), "recipient".to_string(), 10, vec![]);
         tx.fee = 1;
-        tx.nonce = 1; 
+        tx.nonce = 1;
         tx.sign(&keypair);
 
         let result = blockchain.add_transaction(tx);
@@ -214,8 +214,6 @@ mod integration_tests {
             block_period: 5,
             ..PoAConfig::default()
         };
-        
-        
 
         let engine = PoAEngine::new(config, Some(keypair1));
 
@@ -244,5 +242,62 @@ mod integration_tests {
             assert!(result.is_ok());
             assert!(block.signature.is_some());
         }
+    }
+    #[test]
+    fn test_finality_checkpoint_enforcement() {
+        use crate::consensus::finality::{FinalityCert, ValidatorEntry, ValidatorSetSnapshot};
+
+        let keys = crate::crypto::ValidatorKeys::generate().unwrap();
+        let sig_key = keys.sig_key.clone();
+        let pubkey = sig_key.public_key_hex();
+
+        let consensus = Arc::new(PoSEngine::new(PoSConfig::default(), Some(keys)));
+        let mut blockchain = Blockchain::new(consensus, None, 1337, None);
+        blockchain.init_genesis_account(&pubkey);
+
+        let mut validator = crate::account::Validator::new(pubkey.clone(), 1000);
+        validator.active = true;
+        blockchain
+            .state
+            .validators
+            .insert(pubkey.clone(), validator);
+
+        for _ in 1..=100 {
+            blockchain.produce_block(pubkey.clone());
+        }
+
+        let checkpoint_block = blockchain.chain[100].clone();
+
+        let entry = ValidatorEntry {
+            address: pubkey.clone(),
+            stake: 1000,
+            bls_public_key: Vec::new(),
+            pop_signature: Vec::new(),
+        };
+        let snapshot = ValidatorSetSnapshot::new(1, vec![entry]);
+
+        let cert = FinalityCert {
+            epoch: 1,
+            checkpoint_height: 100,
+            checkpoint_hash: checkpoint_block.hash.clone(),
+            agg_sig_bls: vec![1; 48],
+            bitmap: vec![0b0000_0001],
+            set_hash: blockchain.get_validator_set_hash(),
+        };
+
+        blockchain.handle_finality_cert(cert).unwrap();
+        assert_eq!(blockchain.finalized_height, 100);
+        assert_eq!(blockchain.finalized_hash, checkpoint_block.hash);
+
+        let mut conflicting_block = Block::new(100, "wrong_prev".into(), vec![]);
+        conflicting_block.hash = "conflicting_hash".into();
+        conflicting_block.producer = Some(pubkey);
+        conflicting_block.sign(&sig_key);
+
+        let result = blockchain.validate_and_add_block(conflicting_block);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("conflicts with finalized checkpoint"));
     }
 }

@@ -2,7 +2,6 @@ syntax = "proto3";
 
 package budlum.network;
 
-// Strict transaction type
 enum ProtoTransactionType {
     TRANSFER = 0;
     STAKE = 1;
@@ -10,7 +9,6 @@ enum ProtoTransactionType {
     VOTE = 3;
 }
 
-// Transaction data
 message ProtoTransaction {
     string from = 1;
     string to = 2;
@@ -18,14 +16,13 @@ message ProtoTransaction {
     uint64 fee = 4;
     uint64 nonce = 5;
     bytes data = 6;
-    string timestamp = 7; // Serializing u128 cleanly as a string/bytes to avoid overflow, or use two uint64s. String is safer for now.
+    string timestamp = 7; 
     string hash = 8;
     bytes signature = 9;
     uint64 chain_id = 10;
     ProtoTransactionType tx_type = 11;
 }
 
-// Slashing Evidence
 message ProtoSlashingEvidence {
     ProtoBlockHeader header1 = 1;
     ProtoBlockHeader header2 = 2;
@@ -33,10 +30,9 @@ message ProtoSlashingEvidence {
     bytes signature2 = 4;
 }
 
-// Block Header
 message ProtoBlockHeader {
     uint64 index = 1;
-    string timestamp = 2; // u128 as string
+    string timestamp = 2; 
     string previous_hash = 3;
     string hash = 4;
     string producer = 5;
@@ -45,12 +41,16 @@ message ProtoBlockHeader {
     string tx_root = 8;
     repeated ProtoSlashingEvidence slashing_evidence = 9;
     uint64 nonce = 10;
+    uint64 epoch = 11;
+    uint64 slot = 12;
+    bytes vrf_output = 13;
+    bytes vrf_proof = 14;
+    string validator_set_hash = 15;
 }
 
-// Full Block
 message ProtoBlock {
     uint64 index = 1;
-    string timestamp = 2; // u128 as string
+    string timestamp = 2; 
     string previous_hash = 3;
     string hash = 4;
     repeated ProtoTransaction transactions = 5;
@@ -61,9 +61,13 @@ message ProtoBlock {
     repeated ProtoSlashingEvidence slashing_evidence = 11;
     string state_root = 12;
     string tx_root = 13;
+    uint64 epoch = 14;
+    uint64 slot = 15;
+    bytes vrf_output = 16;
+    bytes vrf_proof = 17;
+    string validator_set_hash = 18;
 }
 
-// The master network message wrapper
 message ProtoNetworkMessage {
     oneof payload {
         ProtoHandshake handshake = 1;
@@ -80,15 +84,21 @@ message ProtoNetworkMessage {
         ProtoNewTip new_tip = 12;
         ProtoGetStateSnapshot get_state_snapshot = 13;
         ProtoSnapshotChunk snapshot_chunk = 14;
+        ProtoPrevote prevote = 15;
+        ProtoPrecommit precommit = 16;
+        ProtoFinalityCert finality_cert = 17;
+        ProtoGetQcBlob get_qc_blob = 18;
+        ProtoQcBlobResponse qc_blob_response = 19;
     }
 }
 
-// Individual Message Payloads
 message ProtoHandshake {
     uint32 version_major = 1;
     uint32 version_minor = 2;
     uint64 chain_id = 3;
     uint64 best_height = 4;
+    string validator_set_hash = 5;
+    repeated string supported_schemes = 6;
 }
 
 message ProtoHandshakeAck {
@@ -96,6 +106,8 @@ message ProtoHandshakeAck {
     uint32 version_minor = 2;
     uint64 chain_id = 3;
     uint64 best_height = 4;
+    string validator_set_hash = 5;
+    repeated string supported_schemes = 6;
 }
 
 message ProtoGetHeaders {
@@ -108,7 +120,7 @@ message ProtoHeaders {
 }
 
 message ProtoGetBlocksRange {
-    uint64 from_index = 1; // "from" is reserved in rust, keeping clean
+    uint64 from_index = 1; 
     uint64 to_index = 2;
 }
 
@@ -145,4 +157,42 @@ message ProtoSnapshotChunk {
     uint32 index = 2;
     uint32 total = 3;
     bytes data = 4;
+}
+
+message ProtoPrevote {
+    uint64 epoch = 1;
+    uint64 checkpoint_height = 2;
+    string checkpoint_hash = 3;
+    string voter_id = 4;
+    bytes sig_bls = 5;
+}
+
+message ProtoPrecommit {
+    uint64 epoch = 1;
+    uint64 checkpoint_height = 2;
+    string checkpoint_hash = 3;
+    string voter_id = 4;
+    bytes sig_bls = 5;
+}
+
+message ProtoFinalityCert {
+    uint64 epoch = 1;
+    uint64 checkpoint_height = 2;
+    string checkpoint_hash = 3;
+    bytes agg_sig_bls = 4;
+    bytes bitmap = 5;
+    string set_hash = 6;
+}
+
+message ProtoGetQcBlob {
+    uint64 epoch = 1;
+    uint64 checkpoint_height = 2;
+}
+
+message ProtoQcBlobResponse {
+    uint64 epoch = 1;
+    uint64 checkpoint_height = 2;
+    string checkpoint_hash = 3;
+    bytes blob_data = 4;
+    bool found = 5;
 }

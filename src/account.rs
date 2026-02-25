@@ -44,8 +44,9 @@ pub struct Validator {
     pub jailed: bool,
     pub jail_until: u64,
     pub last_proposed_block: Option<u64>,
-    pub votes_for: u64,     
-    pub votes_against: u64, 
+    pub votes_for: u64,
+    pub votes_against: u64,
+    pub vrf_public_key: Vec<u8>,
 }
 
 impl Validator {
@@ -60,6 +61,7 @@ impl Validator {
             last_proposed_block: None,
             votes_for: 0,
             votes_against: 0,
+            vrf_public_key: Vec::new(),
         }
     }
     pub fn effective_stake(&self) -> u64 {
@@ -129,10 +131,10 @@ impl AccountState {
         };
 
         let bytes = bincode::serialize(&canonical).unwrap_or_default();
-        
+
         let mut prefix_bytes = b"BDLM_STATE_V1".to_vec();
         prefix_bytes.extend(bytes);
-        
+
         crate::hash::calculate_hash(&prefix_bytes)
     }
     pub fn init_genesis(&mut self, genesis_pubkey: &str) {
@@ -251,9 +253,8 @@ impl AccountState {
                         validator.stake = validator.stake.saturating_sub(penalty);
                         validator.slashed = true;
                         validator.active = false;
-                        let jail_duration = 3600 * 24; 
-                                                       
-                                                       
+                        let jail_duration = 3600 * 24;
+
                         let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap()
@@ -280,7 +281,11 @@ impl AccountState {
         for (addr, amount) in released {
             let account = self.get_or_create(&addr);
             account.balance += amount;
-            println!("Unbonding released: {} received {} coins", &addr[..16.min(addr.len())], amount);
+            println!(
+                "Unbonding released: {} received {} coins",
+                &addr[..16.min(addr.len())],
+                amount
+            );
         }
     }
 
@@ -309,14 +314,8 @@ impl AccountState {
             return Ok(());
         }
 
-        
-        
-        
-        
+        let total_cost = tx.total_cost();
 
-        let total_cost = tx.total_cost(); 
-
-        
         {
             let sender_account = self.get_or_create(&tx.from);
             if sender_account.balance < total_cost {
@@ -324,7 +323,6 @@ impl AccountState {
             }
         }
 
-        
         match tx.tx_type {
             TransactionType::Transfer => {
                 let sender = self.get_or_create(&tx.from);
@@ -362,8 +360,12 @@ impl AccountState {
                     if validator.stake == 0 {
                         validator.active = false;
                     }
-                    println!("Unstake queued: {} amount {} releases at epoch {}",
-                        tx.from, tx.amount, self.epoch_index + UNBONDING_EPOCHS);
+                    println!(
+                        "Unstake queued: {} amount {} releases at epoch {}",
+                        tx.from,
+                        tx.amount,
+                        self.epoch_index + UNBONDING_EPOCHS
+                    );
                 } else {
                     return Err("Not a validator".into());
                 }
@@ -383,7 +385,6 @@ impl AccountState {
                 sender.balance -= tx.fee;
                 sender.nonce += 1;
 
-                
                 println!("Vote TX processed from {}", tx.from);
             }
         }

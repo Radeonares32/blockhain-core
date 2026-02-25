@@ -24,12 +24,16 @@ pub enum NetworkMessage {
         version_minor: u32,
         chain_id: u64,
         best_height: u64,
+        validator_set_hash: String,
+        supported_schemes: Vec<String>,
     },
     HandshakeAck {
         version_major: u32,
         version_minor: u32,
         chain_id: u64,
         best_height: u64,
+        validator_set_hash: String,
+        supported_schemes: Vec<String>,
     },
 
     Block(Block),
@@ -77,6 +81,44 @@ pub enum NetworkMessage {
         total: u32,
         data: Vec<u8>,
     },
+
+    Prevote {
+        epoch: u64,
+        checkpoint_height: u64,
+        checkpoint_hash: String,
+        voter_id: String,
+        sig_bls: Vec<u8>,
+    },
+
+    Precommit {
+        epoch: u64,
+        checkpoint_height: u64,
+        checkpoint_hash: String,
+        voter_id: String,
+        sig_bls: Vec<u8>,
+    },
+
+    FinalityCert {
+        epoch: u64,
+        checkpoint_height: u64,
+        checkpoint_hash: String,
+        agg_sig_bls: Vec<u8>,
+        bitmap: Vec<u8>,
+        set_hash: String,
+    },
+
+    GetQcBlob {
+        epoch: u64,
+        checkpoint_height: u64,
+    },
+
+    QcBlobResponse {
+        epoch: u64,
+        checkpoint_height: u64,
+        checkpoint_hash: String,
+        blob_data: Vec<u8>,
+        found: bool,
+    },
 }
 impl NetworkMessage {
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -84,21 +126,21 @@ impl NetworkMessage {
         let proto_msg = crate::network::proto_conversions::pb::ProtoNetworkMessage::from(self);
         proto_msg.encode_to_vec()
     }
-    
+
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
         use prost::Message;
         let proto_msg = crate::network::proto_conversions::pb::ProtoNetworkMessage::decode(bytes)
             .map_err(|e| format!("Protobuf decode error: {}", e))?;
         Self::try_from(proto_msg)
     }
-    
+
     pub fn from_bytes_validated(bytes: &[u8]) -> Result<Self, MessageError> {
         if bytes.len() > MAX_MESSAGE_SIZE {
             return Err(MessageError::TooLarge(bytes.len()));
         }
         Self::from_bytes(bytes).map_err(|e| MessageError::ParseError(e))
     }
-    
+
     pub fn validate_block_size(block: &Block) -> Result<(), MessageError> {
         use prost::Message;
         let proto_block = crate::network::proto_conversions::pb::ProtoBlock::from(block);
@@ -108,7 +150,7 @@ impl NetworkMessage {
         }
         Ok(())
     }
-    
+
     pub fn validate_tx_size(tx: &Transaction) -> Result<(), MessageError> {
         use prost::Message;
         let proto_tx = crate::network::proto_conversions::pb::ProtoTransaction::from(tx);

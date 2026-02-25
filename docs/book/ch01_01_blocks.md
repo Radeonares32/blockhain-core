@@ -27,6 +27,13 @@ pub struct BlockHeader {
     pub tx_root: String,
     pub slashing_evidence: Option<Vec<SlashingEvidence>>,
     pub nonce: u64,
+    // --- Hardening Phase 2: VRF & Finalite ---
+    pub epoch: u64,
+    pub slot: u64,
+    pub proposer_pubkey: Option<String>,
+    pub vrf_output: Vec<u8>,
+    pub vrf_proof: Vec<u8>,
+    pub validator_set_hash: String,
 }
 ```
 
@@ -44,6 +51,11 @@ pub struct BlockHeader {
 | `tx_root` | `String` | 32-byte Hex Hash. | **İşlem Özeti.** Bloktaki tüm işlemlerin Merkle köküdür. Blok içindeki işlemlerin değiştirilemezliğini sağlar. |
 | `slashing_evidence` | `Option<Vec>` | Opsiyonel Liste. Her blokta ceza olmak zorunda değil. | **Suç Kanıtları (PoS).** Kötü niyetli validatörlerin (çift imza atanların) kanıtlarını taşır. Bu kanıtlar blokta yer alırsa, o validatörler cezalandırılır. |
 | `nonce` | `u64` | Dönüştürelebilir sayı. | **İş Kanıtı Sayacı (PoW).** Madencilerin hedef hash'i tutturmak için sürekli değiştirdiği deneme sayısıdır. PoS modunda 0 olabilir. |
+| `epoch` | `u64` | Periyodik döngü sayısı. | **Dönem Bilgisi.** Validatör setinin ve lider seçim tohumunun (seed) güncellendiği zaman dilimidir. |
+| `slot` | `u64` | Zaman dilimi indeksi. | **Slot Numarası.** Belirli bir epoch içindeki zaman dilimi. Her slotta bir lider blok üretme hakkına sahiptir. |
+| `vrf_output` | `Vec<u8>` | Kriptografik rastgele çıktı. | **Piyango Çıktısı.** Liderin seçildiğini kanıtlayan deterministik ancak tahmin edilemez rastgele değer. |
+| `vrf_proof` | `Vec<u8>` | VRF kanıtı. | **Doğrulama Kanıtı.** Diğer düğümlerin, VRF çıktısının doğru üretildiğini kontrol etmesini sağlar. |
+| `validator_set_hash`| `String` | 32-byte Hex Hash. | **Validatör Seti Özeti.** Bloğun üretildiği andaki aktif validatörlerin özetidir. Finalite katmanı için kritik bir referanstır. |
 
 ---
 
@@ -91,7 +103,11 @@ pub fn calculate_hash(&self) -> String {
         self.previous_hash.as_bytes(),
         self.tx_root.as_bytes(),
         &self.nonce.to_le_bytes(),
-        // ... diğer alanlar ...
+        // VRF & Epoch Alanları (Deterministik Hash için)
+        &self.epoch.to_le_bytes(),
+        &self.slot.to_le_bytes(),
+        &self.vrf_output,
+        self.validator_set_hash.as_bytes(),
     ])
 }
 ```

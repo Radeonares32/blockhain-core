@@ -16,6 +16,8 @@
     - [Proof of Work (PoW)](ch03_02_pow.md)
     - [Proof of Stake (PoS) ve Slashing](ch03_03_pos.md)
     - [Proof of Authority (PoA)](ch03_04_poa.md)
+    - [Finalite Katmanı (BLS)](ch03_05_finality.md)
+    - [Optimistic QC ve PQ Attestation](ch03_06_qc.md)
 
 - [Bölüm 4: Ağ ve P2P İletişimi](ch04_networking.md)
     - [Düğüm (Node) Mimarisi](ch04_01_node.md)

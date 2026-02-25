@@ -1,6 +1,6 @@
 # Bölüm 3.3: Proof of Stake (PoS) Motoru ve RANDAO
 
-Bu bölüm, modern blok zincirlerinin tercihi olan PoS (Hisse Kanıtı) algoritmasını; **RANDAO stili rastlantısal (unbiased) lider seçim matematiğini**, ceza (slashing) sistemini ve konsensüs güvenliğini satır satır inceler.
+Bu bölüm, modern blok zincirlerinin tercihi olan PoS (Hisse Kanıtı) algoritmasını; **VRF (Verifiable Random Function) tabanlı lider seçim matematiğini**, çift blok üretme (Double Proposal) ceza sistemini ve konsensüs güvenliğini satır satır inceler.
 
 Kaynak Dosya: `src/consensus/pos.rs`
 
@@ -36,38 +36,46 @@ pub struct PoSEngine {
 
 ## 2. Algoritmalar: RANDAO Lider Seçimi ve Ceza
 
-### Fonksiyon: `select_validator` (Lider Kim?)
+### Fonksiyon: `expected_proposer` (VRF Lider Seçimi)
 
-Her slot için kimin blok üreteceğini belirleyen "Kura Çekimi" fonksiyonudur. Eski ve manipüle edilebilir yaklaşım (`previous_hash` kullanımı) **Mainnet Hardening** işlemi ile RANDAO stiline güncellendi.
+Her slot için kimin blok üreteceğini belirleyen "Kriptografik Piyango" fonksiyonudur. Eski RANDAO yapısı, **Hardening Phase 2** ile VRF tabanlı bir sisteme dönüştürülmüştür.
 
 ```rust
-pub fn select_validator(&self, state: &AccountState, _previous_hash: &str, slot: u64) -> Option<String> {
-    let total_stake = state.get_total_stake();
-    if total_stake == 0 { return None; }
-
-    // 1. RANDAO Tohumunu Al
-    let seed = self.epoch_seed.read().unwrap();
+pub fn expected_proposer(&self, slot: u64, validators: &[Validator]) -> Option<Validator> {
+    // 1. Rastgeleliği Kanıtla (VRF)
+    // Lider, kendi Private Key'i ve Slot numarasını kullanarak 
+    // bir VRF çıktısı (output) ve kanıtı (proof) üretir.
     
-    // 2. SHA3(Epoch_Seed || Slot)
-    let mut hasher = Sha3_256::new();
-    hasher.update(*seed);
-    hasher.update(slot.to_le_bytes());
-    let hash = hasher.finalize();
+    // 2. Eşik Değeri (Threshold) Hesabı
+    // Threshold = 2^256 * (Hisse / Toplam_Hisse)
+    let threshold = self.calculate_vrf_threshold(validator_stake, total_stake);
 
-    let random_value = u64::from_le_bytes(hash[0..8]...);
-    let selection_point = random_value % total_stake;
-
-    // 3. Kazananı Bul (Weighted Selection)
-    let mut cumulative: u64 = 0;
-    for validator in state.get_active_validators() {
-        cumulative += validator.effective_stake();
-        if selection_point < cumulative {
-            return Some(validator.address.clone());
-        }
+    // 3. Piyango Çıkış Kontrolü
+    // Eğer VRF_Output < Threshold ise, o validatör o slotun lideridir.
+    if vrf_output < threshold {
+        return Some(validator);
     }
     None
 }
 ```
+
+**Neden VRF (RANDAO'ya Karşı)?**
+- **Sıfır Manipülasyon (Bias-Resistance):** RANDAO'da son blok üreticisi hash'i manipüle ederek gelecekteki liderleri etkileyebilir (bias). VRF'de ise çıktı sadece liderin gizli anahtarına bağlıdır ve deterministiktir; kimse (lider dahil) sonucu önceden değiştiremez.
+- **Gizlilik:** Kimin lider olacağı, o slot gelene ve lider kanıtını sunana kadar ağ tarafından bilinmez. Bu, DoS saldırılarına karşı koruma sağlar.
+
+---
+
+## 3. Slashing Kanıtları: Suç ve Ceza
+
+### Double Proposal (Çift Blok Üretimi)
+
+Bir liderin aynı slot içinde iki farklı blok üretip imzalamasıdır. Bu, zinciri bölme girişimi (forking) olarak kabul edilir.
+
+- **Tespit:** `seen_blocks` tablosunda aynı `slot` ve `producer` için farklı `block_hash` yakalandığında tetiklenir.
+- **Kanıt:** İki farklı bloğun başlığı ve imzaları `SlashingEvidence::double_proposal` olarak paketlenir.
+- **Ceza:** Suçlu validatörün hissesinin belirli bir kısmı (örn. %10) silinir ve validatör sistemden atılır.
+
+---
 
 ### Fonksiyon: `record_block` (Seed Toplama & Dedektiflik)
 

@@ -39,18 +39,19 @@ graph TD
         Chain --> Store["Storage (Sled DB)"]
     end
 
-    subgraph "Consensus Layer (Pluggable)"
+    subgraph "Consensus Layer (Hybrid)"
         Chain -.-> Engine[ConsensusEngine Trait]
         Engine --> PoW[Proof of Work]
-        Engine --> PoS[Proof of Stake]
-        Engine --> PoA[Proof of Authority]
+        Engine --> PoS[Proof of Stake + VRF]
+        Engine --> Finality[BLS Finality Layer]
+        Engine --> QC[Optimistic QC - PQ Attestation]
     end
 
     subgraph "Networking Layer (libp2p)"
         Node --> Swarm[P2P Swarm]
         Swarm --> Gossip["GossipSub (Block/TX Propagation)"]
         Swarm --> Sync["Snap-Sync Engine"]
-        Swarm --> PeerMgr[Peer Score & Ban Manager]
+        Swarm --> PeerMgr[Granular Rate Limiting]
     end
 ```
 
@@ -108,9 +109,8 @@ cargo build --release
 
 The Budlum blockchain has undergone massive security sweeping and optimization phases, making it ready for production environments.
 
-- **Token-Bucket Rate Limiting**: The Peer Manager assigns a burst capacity and message refill rate to every connected node, strictly dropping messages and punishing peers that attempt to flood or DDOS the network.
-- **Snap-Sync Acceleration**: Nodes syncing from behind request historical data using chunked bulk queries (`GetBlocksByHeight`).
-- **RANDAO-Style Leader Selection (PoS)**: Removed deterministic `previous_hash` dependencies across epochs. The generator now derives epoch freshness seeds using XOR collision (`Sha3(epoch_seed \|\| slot)`). It makes leader elections extremely resistant to single-block bias and network manipulation.
+- **Granular Token-Bucket Rate Limiting**: The Peer Manager assigns dedicated burst capacities for Votes (Finality) and Blobs (QC), strictly dropping messages and punishing peers that attempt to flood consensus-heavy traffic.
+- **VRF-Based Leader Selection (PoS)**: Replaced RANDAO with **Verifiable Random Functions**. Leaders derive lottery outcomes and proofs from their private keys and slots, making elections immune to bias and providing DoS resistance via hidden leadership.
 - **Strict Network Isolation & Handshake Gating**: Nodes executing handshakes enforce `chain_id` checks immediately. Furthermore, the networking layer explicitly drops un-handshaked packets (i.e., unsolicited block or transaction floods) before allocation.
 - **Genesis Spoofing Ban**: Any transaction arriving into the mempool, or network block >0 proposing a transaction acting as `from: "genesis"`, is strictly rejected prior to propagation.
 - **Universal Transaction Validation**: Signatures are evaluated at every touchpoint before advancing into execution arrays. The block processing loop mandates intrinsic `tx.chain_id == block.chain_id` verifications.
@@ -118,7 +118,11 @@ The Budlum blockchain has undergone massive security sweeping and optimization p
 - **Deterministic Serialization**: Migrated from `serde_json` to `bincode` for state root hashing and block slashing evidence to guarantee deterministic byte mappings matching `BlockHeader` hashes. Integrated `prost`-based Protobuf schemas for all P2P payloads.
 - **Panic Vector Eradication**: Mutex locks spanning heavy traffic surfaces (`Arc<Mutex<Blockchain>>` and `PeerManager`) are routed through graceful `.unwrap_or_else` boundaries to terminate connections instead of propagating poisoned lock panics across the async runtime.
 - **Background Maintenance Workers**: Features automated background asynchronous loops ticking via `tokio::time::interval`, running Mempool Garbage Collection (TTL-based expiration), Peer Manager expired ban cleanup, and continuous Kademlia DHT peer discovery (bootstrap loops) to ensure memory health.
-- **Automated Disk Pruning**: Nodes evaluate snapshot policies continuously. After a state snapshot is securely written to disk, `sled::Db` purges stale block data existing beneath the maximum reorg safety margin to permanently prevent SSD exhaustion over long node uptimes.
+- **BLS Finality Layer**: A two-phase voting protocol (Prevote/Precommit) provides deterministic finality. Once 2/3 of validators produce a `FinalityCert`, the block is immutable, and the fork-choice rule strictly forbids reorgs past finalized checkpoints.
+- **Optimistic QC & PQ Attestation**: Integrated **Dilithium** (NIST-standard Post-Quantum) signatures for attestation. Signatures are bundled into Merkle tree `QcBlob` artifacts, verifiable via compact **Fraud Proofs** without bloating the main chain.
+- **Finality-Aware Disk Pruning**: The pruning engine respects finalized checkpoints. Sled DB purges block data only beneath the finalized height, ensuring historical integrity for all confirmed states.
+- **Robust Network Handshake**: Handshakes now exchange `validator_set_hash` and `supported_schemes` (BLS, Dilithium), isolating protocol-incompatible nodes immediately.
+- **Deterministic Serialization**: Migrated to `prost`-based Protobuf schemas for P2P payloads. Bincode is used for sensitive consensus artifacts (Slashing, VRF) to guarantee bit-exact hashing across heterogeneous architectures.
 
 ---
 
@@ -151,9 +155,17 @@ A state-changing directive signed by a wallet.
 
 Budlum abstracts consensus into the `ConsensusEngine` trait.
 
-#### Proof of Stake (PoS) & RANDAO (`src/consensus/pos.rs`)
-- **Selection**: Implements a highly robust epoch-seed randomness engine. Transactions map their hashes via XOR logic at every iteration. It mitigates the bias "Nothing at Stake" vulnerabilities.
-- **Slashing**: Implements **Double-Sign Detection** using slashing evidence pools. Checks unbonding conditions with an active 7-epoch validator exit limit.
+#### Proof of Stake (PoS) & VRF (`src/consensus/pos.rs`)
+- **Selection**: Uses Verifiable Random Functions for unbiased, secure proposers. Thresholding is proportional to stake, ensuring fairness.
+- **Slashing**: Detects **Double-Proposals** and **Double-Signatures**.
+
+#### BLS Finality Layer (`src/consensus/finality.rs`)
+- **BFT Consensus**: Adds a gadget on top of PoS to finalize blocks via aggregate signatures.
+- **Checkpoints**: Every 100 blocks, a mandatory quorum vote seals the chain's past forever.
+
+#### Optimistic QC (`src/consensus/qc.rs`)
+- **Post-Quantum Security**: Implements Dilithium-based attestations.
+- **Fraud Proofs**: Nodes can challenge invalid PQ attestations by submitting Merkle proofs of invalid signatures.
 
 #### Proof of Work (PoW) (`src/consensus/pow.rs`)
 - **Algorithm**: Standard SHA3-256 Hashcash.
@@ -213,10 +225,14 @@ Headers-first synchronization for efficient chain sync and fork-resolution:
 - `GetStateSnapshot` / `SnapshotChunk`: State snapshot sync.
 
 #### Protocol Messages
-Defined in `src/network/protocol.rs`:
-- `Handshake` / `HandshakeAck`: Protocol version exchange (Includes secure `chain_id` verifications).
-- `Block(Block)`: Broadcasts a new block to neighbors.
-- `Transaction(Transaction)`: Broadcasts a pending transaction.
+Defined in `src/network/protocol.rs` and `proto/protocol.proto`:
+- `Handshake` / `HandshakeAck`: Protocol version and validator set hash verification.
+- `Block(Block)` / `Transaction(Transaction)`: Core data propagation.
+- **Finality**: `Prevote`, `Precommit`, and `FinalityCert` (BLS-aggregated).
+- **QC**: `GetQcBlob` and `QcBlobResponse` (Dilithium-indexed).
+
+#### Serialization & Efficiency
+Budlum has migrated to **Protobuf** for P2P messaging to ensure minimal overhead and cross-language compatibility. Determinisitic serialization for consensus state uses **Bincode**.
 
 #### DoS Protection: Peer Scoring
 To prevent spam and attacks, the `PeerManager` (`src/network/peer_manager.rs`) assigns scores and Token-Bucket capacities:
@@ -246,8 +262,12 @@ Data is persisted in **sled**, a high-performance embedded database.
 ### 6. Cryptography & Security
 
 #### Standards
-- **Signatures**: **Ed25519** (Schnorr-based). Fast, secure, small keys.
+- **Signatures**:
+    - **Ed25519**: Primary signature for transactions and basic block identity.
+    - **BLS (bls12_381)**: Multi-signature aggregation for finality voting.
+    - **Dilithium**: Post-Quantum attestation for long-term security.
 - **Hashing**: **SHA3-256** (Keccak).
+- **Proof of Possession (PoP)**: Mandated for BLS key registration to prevent rogue-key attacks.
 
 #### Domain Separation
 We prefix all hashes to prevent context confusion attacks.

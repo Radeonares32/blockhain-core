@@ -1,6 +1,7 @@
 mod account;
 mod block;
 mod blockchain;
+mod chain_config;
 mod cli;
 mod consensus;
 mod crypto;
@@ -9,6 +10,7 @@ mod genesis;
 mod hash;
 mod mempool;
 mod network;
+mod slashing;
 mod snapshot;
 mod storage;
 mod transaction;
@@ -48,14 +50,17 @@ async fn main() {
         ConsensusType::PoS => {
             println!("PoS mode - min stake: {}", config.min_stake);
             let pos_config = crate::consensus::pos::PoSConfig {
-                 min_stake: config.min_stake,
-                 ..Default::default()
+                min_stake: config.min_stake,
+                ..Default::default()
             };
             Arc::new(PoSEngine::new(pos_config, None))
         }
         ConsensusType::PoA => {
             println!("PoA mode");
-            Arc::new(PoAEngine::new(crate::consensus::poa::PoAConfig::default(), None))
+            Arc::new(PoAEngine::new(
+                crate::consensus::poa::PoAConfig::default(),
+                None,
+            ))
         }
     };
     let storage = match storage::Storage::new(&config.db_path) {
@@ -74,20 +79,20 @@ async fn main() {
         config.chain_id,
         Some(pruning_manager),
     )));
-    
+
     if let ConsensusType::PoA = config.consensus {
-         let validators = config.load_validators();
-         if !validators.is_empty() {
-             println!("Initializing PoA validators: {:?}", validators);
-             let mut bc = blockchain.lock().unwrap();
-             for addr in validators {
-                 let mut v = crate::account::Validator::new(addr.clone(), 0);
-                 v.active = true;
-                 bc.state.validators.insert(addr, v);
-             }
-         } else {
-             println!(" No validators configured!");
-         }
+        let validators = config.load_validators();
+        if !validators.is_empty() {
+            println!("Initializing PoA validators: {:?}", validators);
+            let mut bc = blockchain.lock().unwrap();
+            for addr in validators {
+                let mut v = crate::account::Validator::new(addr.clone(), 0);
+                v.active = true;
+                bc.state.validators.insert(addr, v);
+            }
+        } else {
+            println!(" No validators configured!");
+        }
     }
 
     let mut node = Node::new(blockchain.clone()).unwrap();
@@ -154,7 +159,6 @@ async fn main() {
                         }
                         _ => {}
                     }
-
 
                 }
             }

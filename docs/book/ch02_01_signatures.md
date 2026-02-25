@@ -128,9 +128,39 @@ Budlum projesinde adres olarak doğrudan `Public Key`in Hex hali kullanılır.
 
 ---
 
+---
+
+## 3. Hardening Phase 2: Yeni Kriptografik Şemalar
+
+Projenin güvenlik seviyesini artırmak için klasik Ed25519 imzalarının yanına iki yeni şema eklenmiştir: **BLS** (Finalite için) ve **Dilithium** (Kuantum Sonrası Güvenlik için).
+
+### 1. BLS İmzaları (Boneh-Lynn-Shacham)
+
+BLS imzaları, birden fazla imzanın tek bir imza haline getirilebilmesi (Aggregation) özelliği için tercih edilmiştir.
+
+- **Kullanım Alanı:** Finalite Katmanı oylamaları (Prevote/Precommit).
+- **Avantajı:** 100 validatörün farklı imzalarını 96 byte'lık tek bir imzaya indirger. Bu, blok boyutunu ve doğrulama maliyetini (CPU) devasa oranda düşürür.
+- **Teknik Detay:** `bls12_381` eğrisi kullanılır. İmzalar agregasyon sırasında toplanır: $S_{agg} = \sum S_i$.
+
+### 2. Dilithium (Post-Quantum Signature)
+
+Kuantum bilgisayarların Ed25519 gibi klasik eliptik eğri şemalarını kırma potansiyeline karşı eklenmiş bir "Optimistic" güvenlik katmanıdır.
+
+- **Kullanım Alanı:** Optimistic QC (PQ Attestation).
+- **Neden Dilithium?** NIST tarafından kuantum sonrası standart olarak seçilmiştir. Budlum, ana zincir performansını düşürmemek için bu ağır imzaları (yüzlerce byte) ana blok içine değil, yan kanal olan `QcBlob` içine gömer.
+
+### 3. Proof of Possession (PoP)
+
+BLS şemasında saldırganların sahte anahtarlar üretmesini (Rogue-key attack) engellemek için kullanılan bir güvenlik mekanizmasıdır.
+
+- **Mekanizma:** Bir validatör BLS anahtarını sisteme tanıtırken, o anahtarla kendi adresini imzaladığı bir **PoP** kanıtı sunmak zorundadır.
+- **Doğrulama:** `verify_pop` fonksiyonu, validatörün hem Ed25519 hem de BLS anahtarının sahibi olduğunu doğrular.
+
+---
+
 ## Özet
 
 `src/crypto.rs` dosyası, tüm sistemin güvenliğinin dayandığı temeldir.
-1.  **Güvenlik:** Kırılamaz kriptografi (Ed25519).
-2.  **Hız:** Saniyede binlerce imza doğrulayabilme kapasitesi.
-3.  **Basitlik:** Karmaşık adres türetme algoritmaları yerine doğrudan anahtar kullanımı.
+1.  **Hibrit Güvenlik:** Ed25519 (Hız) + BLS (Verimlilik) + Dilithium (PQ Güvenlik).
+2.  **Ölçeklenebilirlik:** BLS agregasyonu sayesinde binlerce validatörle bile düşük ağ yükü.
+3.  **Geleceğe Hazırlık:** Kuantum ötesi senaryolara bugünden hazır mimari.

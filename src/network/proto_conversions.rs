@@ -1,6 +1,6 @@
+use crate::consensus::pos::SlashingEvidence;
 use crate::network::protocol::NetworkMessage;
 use crate::{Block, BlockHeader, Transaction};
-use crate::consensus::pos::SlashingEvidence;
 use prost::Message;
 
 pub mod pb {
@@ -16,14 +16,20 @@ impl From<&Transaction> for pb::ProtoTransaction {
             fee: tx.fee,
             nonce: tx.nonce,
             data: tx.data.clone(),
-            timestamp: tx.timestamp.to_string(), // u128 to string
+            timestamp: tx.timestamp.to_string(),
             hash: tx.hash.clone(),
             signature: tx.signature.clone().unwrap_or_default(),
             chain_id: tx.chain_id,
             tx_type: match tx.tx_type {
-                crate::transaction::TransactionType::Transfer => pb::ProtoTransactionType::Transfer as i32,
-                crate::transaction::TransactionType::Stake => pb::ProtoTransactionType::Stake as i32,
-                crate::transaction::TransactionType::Unstake => pb::ProtoTransactionType::Unstake as i32,
+                crate::transaction::TransactionType::Transfer => {
+                    pb::ProtoTransactionType::Transfer as i32
+                }
+                crate::transaction::TransactionType::Stake => {
+                    pb::ProtoTransactionType::Stake as i32
+                }
+                crate::transaction::TransactionType::Unstake => {
+                    pb::ProtoTransactionType::Unstake as i32
+                }
                 crate::transaction::TransactionType::Vote => pb::ProtoTransactionType::Vote as i32,
             },
         }
@@ -33,8 +39,15 @@ impl From<&Transaction> for pb::ProtoTransaction {
 impl TryFrom<pb::ProtoTransaction> for Transaction {
     type Error = String;
     fn try_from(proto: pb::ProtoTransaction) -> Result<Self, Self::Error> {
-        let timestamp = proto.timestamp.parse::<u128>().map_err(|e| format!("Invalid block timestamp string: {}", e))?;
-        let signature = if proto.signature.is_empty() { None } else { Some(proto.signature) };
+        let timestamp = proto
+            .timestamp
+            .parse::<u128>()
+            .map_err(|e| format!("Invalid block timestamp string: {}", e))?;
+        let signature = if proto.signature.is_empty() {
+            None
+        } else {
+            Some(proto.signature)
+        };
         let tx_type = match pb::ProtoTransactionType::try_from(proto.tx_type) {
             Ok(pb::ProtoTransactionType::Transfer) => crate::transaction::TransactionType::Transfer,
             Ok(pb::ProtoTransactionType::Stake) => crate::transaction::TransactionType::Stake,
@@ -88,15 +101,26 @@ impl From<&BlockHeader> for pb::ProtoBlockHeader {
     fn from(header: &BlockHeader) -> Self {
         pb::ProtoBlockHeader {
             index: header.index,
-            timestamp: header.timestamp.to_string(), // u128 to string
+            timestamp: header.timestamp.to_string(),
             previous_hash: header.previous_hash.clone(),
             hash: header.hash.clone(),
             producer: header.producer.clone().unwrap_or_default(),
             chain_id: header.chain_id,
             state_root: header.state_root.clone(),
             tx_root: header.tx_root.clone(),
-            slashing_evidence: header.slashing_evidence.as_ref().unwrap_or(&vec![]).iter().map(pb::ProtoSlashingEvidence::from).collect(),
+            slashing_evidence: header
+                .slashing_evidence
+                .as_ref()
+                .unwrap_or(&vec![])
+                .iter()
+                .map(pb::ProtoSlashingEvidence::from)
+                .collect(),
             nonce: header.nonce,
+            epoch: header.epoch,
+            slot: header.slot,
+            vrf_output: header.vrf_output.clone(),
+            vrf_proof: header.vrf_proof.clone(),
+            validator_set_hash: header.validator_set_hash.clone(),
         }
     }
 }
@@ -104,13 +128,24 @@ impl From<&BlockHeader> for pb::ProtoBlockHeader {
 impl TryFrom<pb::ProtoBlockHeader> for BlockHeader {
     type Error = String;
     fn try_from(proto: pb::ProtoBlockHeader) -> Result<Self, Self::Error> {
-        let timestamp = proto.timestamp.parse::<u128>().map_err(|e| format!("Invalid block header timestamp string: {}", e))?;
-        let producer = if proto.producer.is_empty() { None } else { Some(proto.producer) };
+        let timestamp = proto
+            .timestamp
+            .parse::<u128>()
+            .map_err(|e| format!("Invalid block header timestamp string: {}", e))?;
+        let producer = if proto.producer.is_empty() {
+            None
+        } else {
+            Some(proto.producer)
+        };
         let mut evidence = Vec::new();
         for ev in proto.slashing_evidence {
             evidence.push(SlashingEvidence::try_from(ev)?);
         }
-        let slashing_evidence = if evidence.is_empty() { None } else { Some(evidence) };
+        let slashing_evidence = if evidence.is_empty() {
+            None
+        } else {
+            Some(evidence)
+        };
         Ok(BlockHeader {
             index: proto.index,
             timestamp,
@@ -122,6 +157,11 @@ impl TryFrom<pb::ProtoBlockHeader> for BlockHeader {
             tx_root: proto.tx_root,
             slashing_evidence,
             nonce: proto.nonce,
+            epoch: proto.epoch,
+            slot: proto.slot,
+            vrf_output: proto.vrf_output,
+            vrf_proof: proto.vrf_proof,
+            validator_set_hash: proto.validator_set_hash,
         })
     }
 }
@@ -130,17 +170,32 @@ impl From<&Block> for pb::ProtoBlock {
     fn from(block: &Block) -> Self {
         pb::ProtoBlock {
             index: block.index,
-            timestamp: block.timestamp.to_string(), // u128 to string
+            timestamp: block.timestamp.to_string(),
             previous_hash: block.previous_hash.clone(),
             hash: block.hash.clone(),
-            transactions: block.transactions.iter().map(pb::ProtoTransaction::from).collect(),
+            transactions: block
+                .transactions
+                .iter()
+                .map(pb::ProtoTransaction::from)
+                .collect(),
             nonce: block.nonce,
             producer: block.producer.clone().unwrap_or_default(),
             signature: block.signature.clone().unwrap_or_default(),
             chain_id: block.chain_id,
-            slashing_evidence: block.slashing_evidence.as_ref().unwrap_or(&vec![]).iter().map(pb::ProtoSlashingEvidence::from).collect(),
+            slashing_evidence: block
+                .slashing_evidence
+                .as_ref()
+                .unwrap_or(&vec![])
+                .iter()
+                .map(pb::ProtoSlashingEvidence::from)
+                .collect(),
             state_root: block.state_root.clone(),
             tx_root: block.tx_root.clone(),
+            epoch: block.epoch,
+            slot: block.slot,
+            vrf_output: block.vrf_output.clone(),
+            vrf_proof: block.vrf_proof.clone(),
+            validator_set_hash: block.validator_set_hash.clone(),
         }
     }
 }
@@ -148,15 +203,30 @@ impl From<&Block> for pb::ProtoBlock {
 impl TryFrom<pb::ProtoBlock> for Block {
     type Error = String;
     fn try_from(proto: pb::ProtoBlock) -> Result<Self, Self::Error> {
-        let timestamp = proto.timestamp.parse::<u128>().map_err(|e| format!("Invalid block timestamp string: {}", e))?;
-        let producer = if proto.producer.is_empty() { None } else { Some(proto.producer) };
-        let signature = if proto.signature.is_empty() { None } else { Some(proto.signature) };
-        
+        let timestamp = proto
+            .timestamp
+            .parse::<u128>()
+            .map_err(|e| format!("Invalid block timestamp string: {}", e))?;
+        let producer = if proto.producer.is_empty() {
+            None
+        } else {
+            Some(proto.producer)
+        };
+        let signature = if proto.signature.is_empty() {
+            None
+        } else {
+            Some(proto.signature)
+        };
+
         let mut evidence = Vec::new();
         for ev in proto.slashing_evidence {
             evidence.push(SlashingEvidence::try_from(ev)?);
         }
-        let slashing_evidence = if evidence.is_empty() { None } else { Some(evidence) };
+        let slashing_evidence = if evidence.is_empty() {
+            None
+        } else {
+            Some(evidence)
+        };
 
         let mut transactions = Vec::new();
         for t in proto.transactions {
@@ -176,30 +246,48 @@ impl TryFrom<pb::ProtoBlock> for Block {
             slashing_evidence,
             state_root: proto.state_root,
             tx_root: proto.tx_root,
+            epoch: proto.epoch,
+            slot: proto.slot,
+            vrf_output: proto.vrf_output,
+            vrf_proof: proto.vrf_proof,
+            validator_set_hash: proto.validator_set_hash,
         })
     }
 }
 
-
 impl From<&NetworkMessage> for pb::ProtoNetworkMessage {
     fn from(msg: &NetworkMessage) -> Self {
         let payload = match msg {
-            NetworkMessage::Handshake { version_major, version_minor, chain_id, best_height } => {
-                pb::proto_network_message::Payload::Handshake(pb::ProtoHandshake {
-                    version_major: *version_major,
-                    version_minor: *version_minor,
-                    chain_id: *chain_id,
-                    best_height: *best_height,
-                })
-            }
-            NetworkMessage::HandshakeAck { version_major, version_minor, chain_id, best_height } => {
-                pb::proto_network_message::Payload::HandshakeAck(pb::ProtoHandshakeAck {
-                    version_major: *version_major,
-                    version_minor: *version_minor,
-                    chain_id: *chain_id,
-                    best_height: *best_height,
-                })
-            }
+            NetworkMessage::Handshake {
+                version_major,
+                version_minor,
+                chain_id,
+                best_height,
+                validator_set_hash,
+                supported_schemes,
+            } => pb::proto_network_message::Payload::Handshake(pb::ProtoHandshake {
+                version_major: *version_major,
+                version_minor: *version_minor,
+                chain_id: *chain_id,
+                best_height: *best_height,
+                validator_set_hash: validator_set_hash.clone(),
+                supported_schemes: supported_schemes.clone(),
+            }),
+            NetworkMessage::HandshakeAck {
+                version_major,
+                version_minor,
+                chain_id,
+                best_height,
+                validator_set_hash,
+                supported_schemes,
+            } => pb::proto_network_message::Payload::HandshakeAck(pb::ProtoHandshakeAck {
+                version_major: *version_major,
+                version_minor: *version_minor,
+                chain_id: *chain_id,
+                best_height: *best_height,
+                validator_set_hash: validator_set_hash.clone(),
+                supported_schemes: supported_schemes.clone(),
+            }),
             NetworkMessage::Block(block) => {
                 pb::proto_network_message::Payload::Block(pb::ProtoBlock::from(block))
             }
@@ -228,7 +316,10 @@ impl From<&NetworkMessage> for pb::ProtoNetworkMessage {
                     blocks: blocks.iter().map(pb::ProtoBlock::from).collect(),
                 })
             }
-            NetworkMessage::GetBlocksByHeight { from_height, to_height } => {
+            NetworkMessage::GetBlocksByHeight {
+                from_height,
+                to_height,
+            } => {
                 pb::proto_network_message::Payload::GetBlocksByHeight(pb::ProtoGetBlocksByHeight {
                     from_height: *from_height,
                     to_height: *to_height,
@@ -239,13 +330,17 @@ impl From<&NetworkMessage> for pb::ProtoNetworkMessage {
                     blocks: blocks.iter().map(pb::ProtoBlock::from).collect(),
                 })
             }
-            NetworkMessage::StateSnapshotResponse { height, state_root, ok } => {
-                pb::proto_network_message::Payload::StateSnapshotResponse(pb::ProtoStateSnapshotResponse {
+            NetworkMessage::StateSnapshotResponse {
+                height,
+                state_root,
+                ok,
+            } => pb::proto_network_message::Payload::StateSnapshotResponse(
+                pb::ProtoStateSnapshotResponse {
                     height: *height,
                     state_root: state_root.clone(),
                     ok: *ok,
-                })
-            }
+                },
+            ),
             NetworkMessage::NewTip { height, hash } => {
                 pb::proto_network_message::Payload::NewTip(pb::ProtoNewTip {
                     height: *height,
@@ -257,14 +352,78 @@ impl From<&NetworkMessage> for pb::ProtoNetworkMessage {
                     height: *height,
                 })
             }
-            NetworkMessage::SnapshotChunk { height, index, total, data } => {
-                pb::proto_network_message::Payload::SnapshotChunk(pb::ProtoSnapshotChunk {
-                    height: *height,
-                    index: *index,
-                    total: *total,
-                    data: data.clone(),
-                })
-            }
+            NetworkMessage::SnapshotChunk {
+                height,
+                index,
+                total,
+                data,
+            } => pb::proto_network_message::Payload::SnapshotChunk(pb::ProtoSnapshotChunk {
+                height: *height,
+                index: *index,
+                total: *total,
+                data: data.clone(),
+            }),
+            NetworkMessage::Prevote {
+                epoch,
+                checkpoint_height,
+                checkpoint_hash,
+                voter_id,
+                sig_bls,
+            } => pb::proto_network_message::Payload::Prevote(pb::ProtoPrevote {
+                epoch: *epoch,
+                checkpoint_height: *checkpoint_height,
+                checkpoint_hash: checkpoint_hash.clone(),
+                voter_id: voter_id.clone(),
+                sig_bls: sig_bls.clone(),
+            }),
+            NetworkMessage::Precommit {
+                epoch,
+                checkpoint_height,
+                checkpoint_hash,
+                voter_id,
+                sig_bls,
+            } => pb::proto_network_message::Payload::Precommit(pb::ProtoPrecommit {
+                epoch: *epoch,
+                checkpoint_height: *checkpoint_height,
+                checkpoint_hash: checkpoint_hash.clone(),
+                voter_id: voter_id.clone(),
+                sig_bls: sig_bls.clone(),
+            }),
+            NetworkMessage::FinalityCert {
+                epoch,
+                checkpoint_height,
+                checkpoint_hash,
+                agg_sig_bls,
+                bitmap,
+                set_hash,
+            } => pb::proto_network_message::Payload::FinalityCert(pb::ProtoFinalityCert {
+                epoch: *epoch,
+                checkpoint_height: *checkpoint_height,
+                checkpoint_hash: checkpoint_hash.clone(),
+                agg_sig_bls: agg_sig_bls.clone(),
+                bitmap: bitmap.clone(),
+                set_hash: set_hash.clone(),
+            }),
+            NetworkMessage::GetQcBlob {
+                epoch,
+                checkpoint_height,
+            } => pb::proto_network_message::Payload::GetQcBlob(pb::ProtoGetQcBlob {
+                epoch: *epoch,
+                checkpoint_height: *checkpoint_height,
+            }),
+            NetworkMessage::QcBlobResponse {
+                epoch,
+                checkpoint_height,
+                checkpoint_hash,
+                blob_data,
+                found,
+            } => pb::proto_network_message::Payload::QcBlobResponse(pb::ProtoQcBlobResponse {
+                epoch: *epoch,
+                checkpoint_height: *checkpoint_height,
+                checkpoint_hash: checkpoint_hash.clone(),
+                blob_data: blob_data.clone(),
+                found: *found,
+            }),
         };
 
         pb::ProtoNetworkMessage {
@@ -276,20 +435,28 @@ impl From<&NetworkMessage> for pb::ProtoNetworkMessage {
 impl TryFrom<pb::ProtoNetworkMessage> for NetworkMessage {
     type Error = String;
     fn try_from(proto: pb::ProtoNetworkMessage) -> Result<Self, Self::Error> {
-        let payload = proto.payload.ok_or("Empty payload in ProtoNetworkMessage")?;
+        let payload = proto
+            .payload
+            .ok_or("Empty payload in ProtoNetworkMessage")?;
         match payload {
             pb::proto_network_message::Payload::Handshake(h) => Ok(NetworkMessage::Handshake {
                 version_major: h.version_major,
                 version_minor: h.version_minor,
                 chain_id: h.chain_id,
                 best_height: h.best_height,
+                validator_set_hash: h.validator_set_hash,
+                supported_schemes: h.supported_schemes,
             }),
-            pb::proto_network_message::Payload::HandshakeAck(h) => Ok(NetworkMessage::HandshakeAck {
-                version_major: h.version_major,
-                version_minor: h.version_minor,
-                chain_id: h.chain_id,
-                best_height: h.best_height,
-            }),
+            pb::proto_network_message::Payload::HandshakeAck(h) => {
+                Ok(NetworkMessage::HandshakeAck {
+                    version_major: h.version_major,
+                    version_minor: h.version_minor,
+                    chain_id: h.chain_id,
+                    best_height: h.best_height,
+                    validator_set_hash: h.validator_set_hash,
+                    supported_schemes: h.supported_schemes,
+                })
+            }
             pb::proto_network_message::Payload::Block(b) => {
                 Ok(NetworkMessage::Block(Block::try_from(b)?))
             }
@@ -355,6 +522,43 @@ impl TryFrom<pb::ProtoNetworkMessage> for NetworkMessage {
                     data: c.data,
                 })
             }
+            pb::proto_network_message::Payload::Prevote(v) => Ok(NetworkMessage::Prevote {
+                epoch: v.epoch,
+                checkpoint_height: v.checkpoint_height,
+                checkpoint_hash: v.checkpoint_hash,
+                voter_id: v.voter_id,
+                sig_bls: v.sig_bls,
+            }),
+            pb::proto_network_message::Payload::Precommit(v) => Ok(NetworkMessage::Precommit {
+                epoch: v.epoch,
+                checkpoint_height: v.checkpoint_height,
+                checkpoint_hash: v.checkpoint_hash,
+                voter_id: v.voter_id,
+                sig_bls: v.sig_bls,
+            }),
+            pb::proto_network_message::Payload::FinalityCert(f) => {
+                Ok(NetworkMessage::FinalityCert {
+                    epoch: f.epoch,
+                    checkpoint_height: f.checkpoint_height,
+                    checkpoint_hash: f.checkpoint_hash,
+                    agg_sig_bls: f.agg_sig_bls,
+                    bitmap: f.bitmap,
+                    set_hash: f.set_hash,
+                })
+            }
+            pb::proto_network_message::Payload::GetQcBlob(q) => Ok(NetworkMessage::GetQcBlob {
+                epoch: q.epoch,
+                checkpoint_height: q.checkpoint_height,
+            }),
+            pb::proto_network_message::Payload::QcBlobResponse(q) => {
+                Ok(NetworkMessage::QcBlobResponse {
+                    epoch: q.epoch,
+                    checkpoint_height: q.checkpoint_height,
+                    checkpoint_hash: q.checkpoint_hash,
+                    blob_data: q.blob_data,
+                    found: q.found,
+                })
+            }
         }
     }
 }
@@ -363,7 +567,7 @@ impl TryFrom<pb::ProtoNetworkMessage> for NetworkMessage {
 mod tests {
     use super::*;
     use crate::crypto::KeyPair;
-    
+
     #[test]
     fn test_transaction_proto_conversion() {
         let keypair = KeyPair::generate().unwrap();
@@ -376,13 +580,12 @@ mod tests {
             vec![1, 2, 3, 4],
         );
         tx.sign(&keypair);
-        
-        // Native -> Proto
+
         let proto_tx = pb::ProtoTransaction::from(&tx);
-        
-        // Proto -> Native
-        let decoded_tx = Transaction::try_from(proto_tx).expect("Failed to decode proto transaction");
-        
+
+        let decoded_tx =
+            Transaction::try_from(proto_tx).expect("Failed to decode proto transaction");
+
         assert_eq!(tx, decoded_tx);
     }
 
@@ -396,18 +599,16 @@ mod tests {
             vec![],
         );
         tx.sign(&keypair);
-        
+
         let mut block = Block::new(10, "PREV_HASH".to_string(), vec![tx]);
         block.state_root = "STATE_ROOT".to_string();
         block.tx_root = "TX_ROOT".to_string();
         block.sign(&keypair);
-        
-        // Native -> Proto
+
         let proto_block = pb::ProtoBlock::from(&block);
-        
-        // Proto -> Native
+
         let decoded_block = Block::try_from(proto_block).expect("Failed to decode proto block");
-        
+
         assert_eq!(block, decoded_block);
     }
 
@@ -415,14 +616,14 @@ mod tests {
     fn test_network_message_block_conversion() {
         let block = Block::new(1, "PREV".to_string(), vec![]);
         let msg = NetworkMessage::Block(block);
-        
-        // Native -> Proto Message
+
         let proto_msg = pb::ProtoNetworkMessage::from(&msg);
-        
-        // Proto Message -> Native
-        let decoded_msg = NetworkMessage::try_from(proto_msg).expect("Failed to decode NetworkMessage");
-        
-        if let (NetworkMessage::Block(orig_b), NetworkMessage::Block(dec_b)) = (&msg, &decoded_msg) {
+
+        let decoded_msg =
+            NetworkMessage::try_from(proto_msg).expect("Failed to decode NetworkMessage");
+
+        if let (NetworkMessage::Block(orig_b), NetworkMessage::Block(dec_b)) = (&msg, &decoded_msg)
+        {
             assert_eq!(orig_b, dec_b);
         } else {
             panic!("Decoded message is not a Block");

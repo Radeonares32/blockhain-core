@@ -1,4 +1,5 @@
 use crate::account::AccountState;
+use crate::consensus::finality::{ValidatorEntry, ValidatorSetSnapshot};
 use crate::consensus::ConsensusEngine;
 use crate::genesis::{GenesisConfig, GENESIS_TIMESTAMP};
 use crate::mempool::{Mempool, MempoolConfig};
@@ -6,6 +7,7 @@ use crate::snapshot::PruningManager;
 use crate::storage::Storage;
 use crate::{Block, Transaction};
 use std::sync::Arc;
+use tracing::info;
 
 pub const MAX_REORG_DEPTH: usize = 100;
 pub const FINALITY_DEPTH: usize = 50;
@@ -19,6 +21,8 @@ pub struct Blockchain {
     pub state: AccountState,
     pub chain_id: u64,
     pub pruning_manager: Option<PruningManager>,
+    pub finalized_height: u64,
+    pub finalized_hash: String,
 }
 impl Blockchain {
     pub fn new(
@@ -48,6 +52,9 @@ impl Blockchain {
         }
 
         let mut snapshot_height = 0;
+        let mut restored_finalized_height = 0;
+        let mut restored_finalized_hash = chain_vec[0].hash.clone();
+
         if let Some(ref pm) = pruning_manager {
             if let Ok(Some(snapshot)) = pm.load_latest_snapshot() {
                 if snapshot.chain_id == chain_id {
@@ -60,9 +67,11 @@ impl Blockchain {
                         acc.nonce = *nonce;
                     }
                     snapshot_height = snapshot.height;
+                    restored_finalized_height = snapshot.finalized_height;
+                    restored_finalized_hash = snapshot.finalized_hash.clone();
                     println!(
-                        "Restored state from snapshot at height {}",
-                        snapshot_height
+                        "Restored state from snapshot at height {} (finalized={})",
+                        snapshot_height, restored_finalized_height
                     );
                 } else {
                     println!(
@@ -106,6 +115,8 @@ impl Blockchain {
             state,
             chain_id,
             pruning_manager,
+            finalized_height: restored_finalized_height,
+            finalized_hash: restored_finalized_hash,
         }
     }
 
@@ -143,6 +154,20 @@ impl Blockchain {
     pub fn last_block(&self) -> &Block {
         self.chain.last().expect("Chain should never be empty")
     }
+
+    pub fn get_validator_set_hash(&self) -> String {
+        let active_validators = self.state.get_active_validators();
+        let entries: Vec<ValidatorEntry> = active_validators
+            .into_iter()
+            .map(|v| ValidatorEntry {
+                address: v.address.clone(),
+                stake: v.stake,
+                bls_public_key: Vec::new(),
+                pop_signature: Vec::new(),
+            })
+            .collect();
+        ValidatorSetSnapshot::compute_hash(&entries)
+    }
     pub fn produce_block(&mut self, producer_address: String) {
         let index = self.chain.len() as u64;
         let previous_hash = self.chain.last().unwrap().hash.clone();
@@ -173,7 +198,10 @@ impl Blockchain {
 
         let mut state_for_root = self.state.clone();
         if let Err(e) = state_for_root.apply_block(&block.transactions, block.producer.as_deref()) {
-            println!("Failed to apply block inside produce_block (state for root): {}", e);
+            println!(
+                "Failed to apply block inside produce_block (state for root): {}",
+                e
+            );
             return;
         }
         block.state_root = state_for_root.calculate_state_root();
@@ -191,7 +219,10 @@ impl Blockchain {
             let _ = store.save_canonical_height(block.index);
         }
 
-        if let Err(e) = self.state.apply_block(&block.transactions, block.producer.as_deref()) {
+        if let Err(e) = self
+            .state
+            .apply_block(&block.transactions, block.producer.as_deref())
+        {
             println!("Failed to apply block to canonical state: {}", e);
             return;
         }
@@ -236,6 +267,22 @@ impl Blockchain {
     }
 
     pub fn validate_and_add_block(&mut self, block: Block) -> Result<(), String> {
+        if block.index <= self.finalized_height && block.hash != self.finalized_hash {
+            if let Some(finalized_path_block) = self.chain.get(block.index as usize) {
+                if finalized_path_block.hash != block.hash {
+                    return Err(format!(
+                        "Block at height {} conflicts with finalized checkpoint",
+                        block.index
+                    ));
+                }
+            } else {
+                return Err(format!(
+                    "Block at height {} is below finalized height {}",
+                    block.index, self.finalized_height
+                ));
+            }
+        }
+
         if block.chain_id != self.chain_id {
             return Err(format!(
                 "Invalid Chain ID: expected {}, got {}",
@@ -274,7 +321,8 @@ impl Blockchain {
         for (i, tx) in block.transactions.iter().enumerate() {
             if tx.chain_id != block.chain_id {
                 return Err(format!(
-                    "Invalid transaction at index {}: Chain ID mismatch. Expected {}, got {}", i, block.chain_id, tx.chain_id
+                    "Invalid transaction at index {}: Chain ID mismatch. Expected {}, got {}",
+                    i, block.chain_id, tx.chain_id
                 ));
             }
             if block.index > 0 && tx.from == "genesis" {
@@ -339,13 +387,24 @@ impl Blockchain {
             let last_block = self.chain.last().unwrap();
             let height = last_block.index;
             if pruning_manager.should_create_snapshot(height) {
-                let snapshot = crate::snapshot::StateSnapshot::from_state(height, last_block.hash.clone(), self.chain_id, &self.state);
+                let snapshot = crate::snapshot::StateSnapshot::from_state(
+                    height,
+                    last_block.hash.clone(),
+                    self.chain_id,
+                    &self.state,
+                    self.finalized_height,
+                    self.finalized_hash.clone(),
+                );
                 if let Err(e) = pruning_manager.save_snapshot(&snapshot) {
                     println!("Failed to save snapshot at height {}: {}", height, e);
                 } else {
                     println!("Saved state snapshot at height {}", height);
-                    
-                    let prunable = pruning_manager.get_prunable_blocks(self.chain.len() as u64, height);
+
+                    let prunable = pruning_manager.get_prunable_blocks(
+                        self.chain.len() as u64,
+                        height,
+                        self.finalized_height,
+                    );
                     if !prunable.is_empty() {
                         if let Some(ref store) = self.storage {
                             for block_index in &prunable {
@@ -486,7 +545,10 @@ impl Blockchain {
         let mut state = AccountState::new();
         for block in chain.iter() {
             if let Err(e) = state.apply_block(&block.transactions, block.producer.as_deref()) {
-                return Err(format!("Failed to rebuild state at block {}: {}", block.index, e));
+                return Err(format!(
+                    "Failed to rebuild state at block {}: {}",
+                    block.index, e
+                ));
             }
         }
         Ok(state)
@@ -503,10 +565,70 @@ impl Blockchain {
             println!(" Block #{}: {}", block.index, &block.hash[..16]);
         }
     }
+    pub fn handle_finality_cert(
+        &mut self,
+        cert: crate::consensus::finality::FinalityCert,
+    ) -> Result<(), String> {
+        if cert.checkpoint_height <= self.finalized_height {
+            return Ok(());
+        }
+
+        if !crate::consensus::finality::is_checkpoint_height(cert.checkpoint_height) {
+            return Err(format!(
+                "Height {} is not a valid checkpoint height",
+                cert.checkpoint_height
+            ));
+        }
+
+        if let Some(block) = self.chain.get(cert.checkpoint_height as usize) {
+            if block.hash != cert.checkpoint_hash {
+                return Err(format!(
+                    "Certificate hash {} mismatch with our block hash {} at height {}",
+                    cert.checkpoint_hash, block.hash, cert.checkpoint_height
+                ));
+            }
+        } else {
+            return Err(format!(
+                "We don't have block at height {} yet",
+                cert.checkpoint_height
+            ));
+        }
+
+        let active_validators = self.state.get_active_validators();
+        let entries: Vec<ValidatorEntry> = active_validators
+            .into_iter()
+            .map(|v| ValidatorEntry {
+                address: v.address.clone(),
+                stake: v.stake,
+                bls_public_key: Vec::new(),
+                pop_signature: Vec::new(),
+            })
+            .collect();
+        let snapshot = ValidatorSetSnapshot::new(cert.epoch, entries);
+
+        cert.verify(&snapshot)?;
+
+        self.finalized_height = cert.checkpoint_height;
+        self.finalized_hash = cert.checkpoint_hash.clone();
+
+        info!(
+            "FINALIZED checkpoint: height={}, hash={}",
+            self.finalized_height, self.finalized_hash
+        );
+
+        if let Some(ref store) = self.storage {
+            let _ = store.save_finality_cert(self.finalized_height, &cert);
+            let _ = store.save_canonical_height(self.finalized_height);
+        }
+
+        Ok(())
+    }
+
     pub fn consensus(&self) -> &dyn ConsensusEngine {
         self.consensus.as_ref()
     }
 }
+
 impl Clone for Blockchain {
     fn clone(&self) -> Self {
         Blockchain {
@@ -517,6 +639,8 @@ impl Clone for Blockchain {
             state: self.state.clone(),
             chain_id: self.chain_id,
             pruning_manager: self.pruning_manager.clone(),
+            finalized_height: self.finalized_height,
+            finalized_hash: self.finalized_hash.clone(),
         }
     }
 }
@@ -552,37 +676,28 @@ mod tests {
         let consensus = Arc::new(PoWEngine::new(1));
         let mut blockchain = Blockchain::new(consensus, None, 1337, None);
 
-        
         let validator_addr = "validator1".to_string();
         blockchain.state.add_validator(validator_addr.clone(), 1000);
 
-        
         if let Some(v) = blockchain.state.get_validator_mut(&validator_addr) {
             v.jailed = true;
             v.active = false;
-            v.jail_until = 0; 
+            v.jail_until = 0;
         }
 
-        
         assert_eq!(blockchain.state.epoch_index, 0);
         if let Some(v) = blockchain.state.get_validator(&validator_addr) {
             assert!(v.jailed);
         }
 
-        
-        
-        
         for _ in 0..EPOCH_LENGTH {
             blockchain.produce_block("miner".to_string());
         }
 
-        
         assert_eq!(blockchain.chain.len(), (EPOCH_LENGTH as usize) + 1);
 
-        
         assert_eq!(blockchain.state.epoch_index, 1);
 
-        
         if let Some(v) = blockchain.state.get_validator(&validator_addr) {
             assert!(!v.jailed, "Validator should have been unjailed");
             assert!(v.active, "Validator should be active");
@@ -597,23 +712,24 @@ mod tests {
         use crate::consensus::pos::{PoSConfig, SlashingEvidence};
         use crate::consensus::PoSEngine;
 
-        
-        let alice_key = KeyPair::generate().unwrap();
+        let alice_keys = crate::crypto::ValidatorKeys::generate().unwrap();
+        let alice_key = alice_keys.sig_key.clone();
+        let alice_vrf_pub = alice_keys.vrf_key.public.to_bytes().to_vec();
         let alice_pub = alice_key.public_key_hex();
 
-        
         let mut config = PoSConfig::default();
-        config.slashing_penalty = 0.50; 
+        config.slashing_penalty = 0.50;
 
-        let engine = Arc::new(PoSEngine::new(config, Some(alice_key.clone()))); 
+        let engine = Arc::new(PoSEngine::new(config, Some(alice_keys)));
 
         let mut blockchain = Blockchain::new(engine.clone(), None, 1337, None);
 
-        
         blockchain.state.add_validator(alice_pub.clone(), 2000);
+        if let Some(v) = blockchain.state.get_validator_mut(&alice_pub) {
+            v.vrf_public_key = alice_vrf_pub.clone();
+        }
         blockchain.state.add_balance(&alice_pub, 100);
 
-        
         let mut real_b1 = Block::new(10, "prev".into(), vec![]);
         real_b1.producer = Some(alice_pub.clone());
         real_b1.hash = real_b1.calculate_hash();
@@ -622,7 +738,7 @@ mod tests {
         let h1 = BlockHeader::from_block(&real_b1);
 
         let mut real_b2 = Block::new(10, "prev".into(), vec![]);
-        real_b2.timestamp += 1; 
+        real_b2.timestamp += 1;
         real_b2.producer = Some(alice_pub.clone());
         real_b2.hash = real_b2.calculate_hash();
         let sig2 = alice_key.sign(real_b2.hash.as_bytes()).to_vec();
@@ -631,14 +747,11 @@ mod tests {
 
         let evidence = SlashingEvidence::new(h1, h2, sig1, sig2);
 
-        
         {
             let mut guard = engine.slashing_evidence.write().unwrap();
             guard.push(evidence);
         }
 
-        
-        
         blockchain.produce_block(alice_pub.clone());
 
         let produced_block = blockchain.chain.last().unwrap();
@@ -648,11 +761,11 @@ mod tests {
         );
         assert_eq!(produced_block.slashing_evidence.as_ref().unwrap().len(), 1);
 
-        
-        
-
         let mut blockchain2 = Blockchain::new(engine.clone(), None, 1337, None);
         blockchain2.state.add_validator(alice_pub.clone(), 2000);
+        if let Some(v) = blockchain2.state.get_validator_mut(&alice_pub) {
+            v.vrf_public_key = alice_vrf_pub.clone();
+        }
         blockchain2.state.add_balance(&alice_pub, 100);
         blockchain2
             .validate_and_add_block(produced_block.clone())
@@ -672,14 +785,7 @@ mod tests {
         let mut bc = Blockchain::new(consensus, None, 1337, None);
         bc.state.add_balance(&sender_pub, 1000);
 
-        let mut tx = Transaction::new_with_fee(
-            sender_pub.clone(),
-            "bob".into(),
-            100,
-            5,
-            0,
-            vec![],
-        );
+        let mut tx = Transaction::new_with_fee(sender_pub.clone(), "bob".into(), 100, 5, 0, vec![]);
         tx.sign(&sender);
         bc.add_transaction(tx).unwrap();
 
@@ -700,6 +806,23 @@ mod tests {
         let result = bc.validate_and_add_block(block);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("state_root"));
+    }
+
+    #[test]
+    fn test_validate_rejects_finalized_conflict() {
+        let consensus = Arc::new(PoWEngine::new(0));
+        let mut bc = Blockchain::new(consensus, None, 1337, None);
+
+        bc.finalized_height = 0;
+        bc.finalized_hash = bc.chain[0].hash.clone();
+
+        let mut bad_block = bc.chain[0].clone();
+        bad_block.previous_hash = "wrong".to_string();
+        bad_block.hash = bad_block.calculate_hash();
+
+        let result = bc.validate_and_add_block(bad_block);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("conflicts with finalized"));
     }
 
     #[test]

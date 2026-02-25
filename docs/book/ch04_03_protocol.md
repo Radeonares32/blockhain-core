@@ -17,12 +17,13 @@ Dünyanın her yerindeki bilgisayarların anlaşabilmesi için ortak bir `Enum` 
 
 Ağdaki tüm iletişim bir enum (numaralandırılmış yapı) üzerinden geçer. En önemli türleri şunlardır:
 
-1.  **El Sıkışma (Handshake / HandshakeAck)**: Ağa yeni katılanlar bağlanırken versiyon ve `chain_id` bilgilerini doğrularlar. Hatalı `chain_id` anında engellenir (Ban).
+1.  **El Sıkışma (Handshake / HandshakeAck)**: Ağa yeni katılanlar bağlanırken versiyon ve `chain_id` bilgilerini doğrularlar. **Hardening Phase 2** ile artık `validator_set_hash` (aktif validatörlerin özeti) ve `supported_schemes` (ED25519, BLS, DILITHIUM) bilgileri de doğrulanır. Uyumsuz olanlar anında engellenir.
 2.  **Block**: Yeni çıkarılan bir bloğun tüm peer'lara (eşlere) yayılması.
-3.  **Transaction**: Kullanıcılar tarafından oluşturulan ve doğrulanmış (imza, bakiye vb.) yeni bir işlemin mempool'lara (işlem havuzu) yayılması.
-4.  **NewTip**: Bir node, blok zincirinde yeni bir yüksekliğe ulaştığında, diğer düğümleri haberdar etmek için o bloğun hash ve yüksekliğini (height) gönderir.
-5.  **GetBlocksByHeight / BlocksByHeight (Snap-Sync)**: Zincirin gerisinde kalan bir düğümün, `NewTip` duyduğunda kendi yüksekliğinden itibaren yeni blokları 256'şar parçalar (chunk) halinde topluca istemesini (ve almasını) sağlayan hızlı senkronizasyon mesajlarıdır.
-6.  **GetStateSnapshot / StateSnapshotResponse**: Node'ların hızlı doğrulama için belli yüksekliklerdeki `state_root` özetini öğrenme taleplerini yönetir.
+3.  **Transaction**: Yeni işlemlerin yayılması.
+4.  **Finalite Oyları (Prevote / Precommit)**: BLS tabanlı finalite katmanı oyları.
+5.  **FinalityCert**: Bir checkpoint'in finalize edildiğini kanıtlayan eşik imzalı sertifika.
+6.  **QC İstekleri (GetQcBlob / QcBlobResponse)**: Optimistik QC doğrulaması için Dilithium imzalı blob paketlerinin paylaşımı.
+7.  **NewTip / Sync Mesajları**: Zincir senkronizasyonu için kullanılan `GetBlocksByHeight` vb. mesajlar.
 
 *Tam Liste kaynak kodu üzerinden incelenebilir: `src/network/protocol.rs`*
 
@@ -30,15 +31,16 @@ Ağdaki tüm iletişim bir enum (numaralandırılmış yapı) üzerinden geçer.
 
 Budlum Core iletişimi **GossipSub** üzerinden yürütür. Doğrudan tek bir node'a mesaj göndermek yerine (TCP Direct Stream harici), belli konu başlıklarına (örneğin "blocks" veya "transactions") mesaj yayımlanır. Kütüphane optimalliği sayesinde bu mesaj saniyeler içinde ağdaki tüm düğümlere dedikodu ("gossip") yöntemiyle ulaşır.
 
-## Serileştirme (Serde)
+## Serileştirme (Serialization)
 
 Mesajlar ağ üzerine bayt olarak çıkmadan önce serileştirilir.
-`budlum-core`, Rust ekosistemindeki en popüler formatlama kütüphanesi olan `serde` ve `serde_json` kullanır. İlerleyen güncellemelerde daha küçük bant genişliği kullanmak amacıyla `bincode` veya `protobuf`'a geçiş hedeflenmektedir. O anki (Handshake ve Sync paketi harici) standart payload boyutu metin tabanlı JSON ile yönetilmektedir.
-ce", "amount": 10}` (Okunabilir ama yer kaplar. String işleme yavaştır.)
--   **Bincode:** `05416c6963650a000000...` (Binary. Çok sıkışıktır. CPU dostudur.)
+`budlum-core`, **Hardening Phase 2** ile birlikte hibrit bir serileştirme kullanır:
+- **Protobuf (`protocol.proto`):** Yüksek performanslı ağ mesajları ve ana veri yapıları için kullanılır (CPU ve bant genişliği tasarrufu).
+- **Serde-JSON:** Bazı yüksek seviye konfigürasyon ve tanı mesajları için (okunabilirlik amacıyla) kullanılır.
+- **Bincode:** Slashing kanıtları gibi deterministik (bayt-bayt aynı) olması gereken yapılar için tercih edilir.
 
-**Performans Farkı:**
-Blok zincirinde saniyede binlerce işlem olur. JSON kullanmak, ağı %30-40 yavaşlatır ve CPU'yu yorar. Bincode, Rust struct'larını doğrudan bellekteki haliyle (ve ona çok yakın) diske/ağa yazar.
+**Neden Protobuf?**
+Blok zincirinde saniyede binlerce işlem olur. JSON kullanmak, ağı %30-40 yavaşlatır ve CPU'yu yorar. Protobuf, veriyi ikili (binary) formatta paketleyerek çok daha hızlı ve küçük paketler oluşturur.
 
 ---
 

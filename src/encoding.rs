@@ -156,6 +156,11 @@ mod tests {
             tx_root: "tx_root".to_string(),
             nonce: 0,
             slashing_evidence: None,
+            epoch: 0,
+            slot: 0,
+            vrf_output: Vec::new(),
+            vrf_proof: Vec::new(),
+            validator_set_hash: String::new(),
         };
         let enc = encode_block_header(&header);
         assert!(!enc.is_empty());

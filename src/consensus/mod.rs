@@ -1,6 +1,8 @@
+pub mod finality;
 pub mod poa;
 pub mod pos;
 mod pow;
+pub mod qc;
 use crate::Block;
 pub use poa::PoAEngine;
 pub use pos::PoSEngine;

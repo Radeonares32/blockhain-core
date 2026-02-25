@@ -110,7 +110,7 @@ impl Transaction {
             amount: 0,
             fee: 0,
             nonce: 0,
-            data: hex::decode("52414445").unwrap(), 
+            data: hex::decode("52414445").unwrap(),
             timestamp: 0,
             hash: "genesis".to_string(),
             signature: None,
@@ -120,7 +120,7 @@ impl Transaction {
     }
     pub fn signing_hash(&self) -> [u8; 32] {
         let mut hasher = Sha3_256::new();
-        hasher.update(b"BDLM_TX_V2"); 
+        hasher.update(b"BDLM_TX_V2");
         hasher.update(self.from.as_bytes());
         hasher.update(self.to.as_bytes());
         hasher.update(self.amount.to_le_bytes());
@@ -129,7 +129,7 @@ impl Transaction {
         hasher.update(&self.data);
         hasher.update(self.timestamp.to_le_bytes());
         hasher.update(self.chain_id.to_le_bytes());
-        
+
         let type_byte = match self.tx_type {
             TransactionType::Transfer => 0,
             TransactionType::Stake => 1,
@@ -234,12 +234,8 @@ impl Transaction {
                     return false;
                 }
             }
-            TransactionType::Unstake => {
-                
-            }
-            TransactionType::Vote => {
-                
-            }
+            TransactionType::Unstake => {}
+            TransactionType::Vote => {}
         }
         true
     }

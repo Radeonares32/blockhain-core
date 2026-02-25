@@ -39,8 +39,6 @@ impl PoAEngine {
         PoAEngine { config, keypair }
     }
 
-    
-
     pub fn expected_proposer<'a>(
         &self,
         block_index: u64,
@@ -195,7 +193,6 @@ mod tests {
         let alice = KeyPair::generate().unwrap();
         let bob = KeyPair::generate().unwrap();
 
-        
         state.validators.insert(
             alice.public_key_hex(),
             Validator::new(alice.public_key_hex(), 0),
@@ -205,7 +202,6 @@ mod tests {
             Validator::new(bob.public_key_hex(), 0),
         );
 
-        
         state
             .validators
             .get_mut(&alice.public_key_hex())
@@ -220,18 +216,14 @@ mod tests {
         let engine = PoAEngine::new(PoAConfig::default(), None);
 
         let active_refs = state.get_active_validators();
-        
-        
 
         if active_refs.len() < 2 {
-            
             return;
         }
 
         let p1 = engine.expected_proposer(1, &active_refs).unwrap();
         let p2 = engine.expected_proposer(2, &active_refs).unwrap();
 
-        
         assert_ne!(p1.address, p2.address);
     }
 
@@ -249,8 +241,6 @@ mod tests {
         let mut engine = PoAEngine::new(PoAConfig::default(), Some(keypair));
 
         let mut block = Block::new(1, "prev".into(), vec![]);
-        
-        
 
         engine.prepare_block(&mut block, &state).unwrap();
 

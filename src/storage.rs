@@ -15,7 +15,8 @@ impl Storage {
         let val = serde_json::to_vec(block)?;
         self.db.insert(key, val)?;
         let height_key = format!("HEIGHT:{}", block.index);
-        self.db.insert(height_key.as_bytes(), block.hash.as_bytes())?;
+        self.db
+            .insert(height_key.as_bytes(), block.hash.as_bytes())?;
         self.db.flush()?;
         Ok(())
     }
@@ -55,12 +56,63 @@ impl Storage {
             self.db.remove(key.as_bytes())?;
             let state_root_key = format!("STATE_ROOT:{}", height);
             self.db.remove(state_root_key.as_bytes())?;
+            let cert_key = format!("FINALITY_CERT:{}", height);
+            self.db.remove(cert_key.as_bytes())?;
+            let qc_key = format!("QC_BLOB:{}", height);
+            self.db.remove(qc_key.as_bytes())?;
             self.db.flush()?;
         }
         Ok(())
     }
+    pub fn save_qc_blob(
+        &self,
+        height: u64,
+        blob: &crate::consensus::qc::QcBlob,
+    ) -> std::io::Result<()> {
+        let key = format!("QC_BLOB:{}", height);
+        let val = serde_json::to_vec(blob)?;
+        self.db.insert(key.as_bytes(), val)?;
+        self.db.flush()?;
+        Ok(())
+    }
+    pub fn get_qc_blob(
+        &self,
+        height: u64,
+    ) -> std::io::Result<Option<crate::consensus::qc::QcBlob>> {
+        let key = format!("QC_BLOB:{}", height);
+        if let Some(val) = self.db.get(key.as_bytes())? {
+            let blob = serde_json::from_slice(&val)?;
+            Ok(Some(blob))
+        } else {
+            Ok(None)
+        }
+    }
+    pub fn save_finality_cert(
+        &self,
+        height: u64,
+        cert: &crate::consensus::finality::FinalityCert,
+    ) -> std::io::Result<()> {
+        let key = format!("FINALITY_CERT:{}", height);
+        let val = serde_json::to_vec(cert)?;
+        self.db.insert(key.as_bytes(), val)?;
+        self.db.flush()?;
+        Ok(())
+    }
+    pub fn get_finality_cert(
+        &self,
+        height: u64,
+    ) -> std::io::Result<Option<crate::consensus::finality::FinalityCert>> {
+        let key = format!("FINALITY_CERT:{}", height);
+        if let Some(val) = self.db.get(key.as_bytes())? {
+            let cert = serde_json::from_slice(&val)?;
+            Ok(Some(cert))
+        } else {
+            Ok(None)
+        }
+    }
     pub fn save_canonical_height(&self, height: u64) -> std::io::Result<()> {
-        self.db.insert("CANONICAL_HEIGHT", height.to_string().as_bytes())?;
+        self.db
+            .insert("CANONICAL_HEIGHT", height.to_string().as_bytes())?;
         self.db.flush()?;
         Ok(())
     }

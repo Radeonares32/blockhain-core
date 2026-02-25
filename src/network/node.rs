@@ -241,7 +241,23 @@ impl Node {
                         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                             info!("Connected to {}", peer_id);
                             let chain = self.blockchain.lock().unwrap_or_else(|e| { tracing::error!("Blockchain lock poisoned: {}", e); std::process::exit(1); });
-                            info!("DEBUG: Connected to {}, Chain length: {}", peer_id, chain.chain.len());
+
+                            let handshake = NetworkMessage::Handshake {
+                                version_major: crate::encoding::PROTOCOL_VERSION_MAJOR,
+                                version_minor: crate::encoding::PROTOCOL_VERSION_MINOR,
+                                chain_id: chain.chain_id,
+                                best_height: chain.chain.len() as u64,
+                                validator_set_hash: chain.get_validator_set_hash(),
+                                supported_schemes: vec!["ED25519".to_string(), "BLS".to_string(), "DILITHIUM".to_string()],
+                            };
+
+                            info!("DEBUG: Connected to {}, Chain length: {}, sending Handshake", peer_id, chain.chain.len());
+
+                            let topic = gossipsub::IdentTopic::new("blocks");
+                            if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(topic, handshake.to_bytes()) {
+                                warn!("Failed to send Handshake: {}", e);
+                            }
+
                             if chain.chain.len() == 1 {
                                 let locator = vec![chain.chain.last().unwrap().hash.clone()];
                                 drop(chain);
@@ -306,7 +322,7 @@ impl Node {
 
                                     if !is_handshake_msg && !self.peer_manager.lock().unwrap_or_else(|e| { tracing::error!("PeerManager lock poisoned: {}", e); std::process::exit(1); }).is_handshaked(&peer_id) {
                                         warn!("Peer {} sent {:?} before completing handshake, dropping.", peer_id, msg);
-                                        // Reduce score slightly for bad behavior
+
                                         self.peer_manager.lock().unwrap_or_else(|e| { tracing::error!("PeerManager lock poisoned: {}", e); std::process::exit(1); }).report_invalid_tx(&peer_id);
                                         continue;
                                     }
@@ -353,13 +369,10 @@ impl Node {
                                         }
                                     }
 
-
-
                                     NetworkMessage::GetHeaders { locator, limit } => {
                                         info!("GetHeaders request from {} (locator: {} hashes, limit: {})",
                                             peer_id, locator.len(), limit);
                                         let chain = self.blockchain.lock().unwrap_or_else(|e| { tracing::error!("Blockchain lock poisoned: {}", e); std::process::exit(1); });
-
 
                                         let start_idx = locator.iter()
                                             .find_map(|hash| {
@@ -533,15 +546,15 @@ impl Node {
 
                                     }
 
-                                    NetworkMessage::Handshake { version_major, version_minor, chain_id, best_height } => {
+                                    NetworkMessage::Handshake { version_major, version_minor, chain_id, best_height, validator_set_hash, supported_schemes } => {
                                         let my_chain_id = self.blockchain.lock().unwrap_or_else(|e| { tracing::error!("Blockchain lock poisoned: {}", e); std::process::exit(1); }).chain_id;
                                         if chain_id != my_chain_id {
                                             warn!("Peer {} has wrong chain_id {} (expected {}). Banning.", peer_id, chain_id, my_chain_id);
                                             self.peer_manager.lock().unwrap_or_else(|e| { tracing::error!("PeerManager lock poisoned: {}", e); std::process::exit(1); }).ban_peer(&peer_id);
                                             continue;
                                         }
-                                        info!("Handshake from {}: v{}.{}, chain={}, height={}",
-                                            peer_id, version_major, version_minor, chain_id, best_height);
+                                        info!("Handshake from {}: v{}.{}, chain={}, height={}, val_set={}, schemes={:?}",
+                                            peer_id, version_major, version_minor, chain_id, best_height, validator_set_hash, supported_schemes);
                                         self.peer_manager.lock().unwrap_or_else(|e| { tracing::error!("PeerManager lock poisoned: {}", e); std::process::exit(1); }).set_handshaked(&peer_id, true);
 
                                         let chain = self.blockchain.lock().unwrap_or_else(|e| { tracing::error!("Blockchain lock poisoned: {}", e); std::process::exit(1); });
@@ -550,6 +563,8 @@ impl Node {
                                             version_minor: crate::encoding::PROTOCOL_VERSION_MINOR,
                                             chain_id: chain.chain_id,
                                             best_height: chain.chain.len() as u64,
+                                            validator_set_hash: chain.get_validator_set_hash(),
+                                            supported_schemes: vec!["ED25519".to_string(), "BLS".to_string(), "DILITHIUM".to_string()],
                                         };
                                         let topic = gossipsub::IdentTopic::new("blocks");
                                         let data = response.to_bytes();
@@ -558,18 +573,107 @@ impl Node {
                                         }
                                     }
 
-                                    NetworkMessage::HandshakeAck { version_major, version_minor, chain_id, best_height } => {
+                                    NetworkMessage::HandshakeAck { version_major, version_minor, chain_id, best_height, validator_set_hash, supported_schemes } => {
                                         let my_chain_id = self.blockchain.lock().unwrap_or_else(|e| { tracing::error!("Blockchain lock poisoned: {}", e); std::process::exit(1); }).chain_id;
                                         if chain_id != my_chain_id {
                                             warn!("Peer {} Ack with wrong chain_id {} (expected {}). Banning.", peer_id, chain_id, my_chain_id);
                                             self.peer_manager.lock().unwrap_or_else(|e| { tracing::error!("PeerManager lock poisoned: {}", e); std::process::exit(1); }).ban_peer(&peer_id);
                                             continue;
                                         }
-                                        info!("HandshakeAck from {}: v{}.{}, chain={}, height={}",
-                                            peer_id, version_major, version_minor, chain_id, best_height);
+                                        info!("HandshakeAck from {}: v{}.{}, chain={}, height={}, val_set={}, schemes={:?}",
+                                            peer_id, version_major, version_minor, chain_id, best_height, validator_set_hash, supported_schemes);
                                         let mut pm = self.peer_manager.lock().unwrap_or_else(|e| { tracing::error!("PeerManager lock poisoned: {}", e); std::process::exit(1); });
                                         pm.set_handshaked(&peer_id, true);
                                         pm.report_good_behavior(&peer_id);
+                                    }
+
+                                    NetworkMessage::Prevote { epoch, checkpoint_height, checkpoint_hash, voter_id, .. } => {
+                                        if !self.peer_manager.lock().unwrap().check_vote_rate_limit(&peer_id) {
+                                            warn!("Peer {} exceeded vote rate limit. Ignoring Prevote.", peer_id);
+                                            continue;
+                                        }
+                                        info!("Prevote from {}: epoch={}, height={}, hash={}..., voter={}",
+                                            peer_id, epoch, checkpoint_height, &checkpoint_hash[..16.min(checkpoint_hash.len())], voter_id);
+                                    }
+
+                                    NetworkMessage::Precommit { epoch, checkpoint_height, checkpoint_hash, voter_id, .. } => {
+                                        if !self.peer_manager.lock().unwrap().check_vote_rate_limit(&peer_id) {
+                                            warn!("Peer {} exceeded vote rate limit. Ignoring Precommit.", peer_id);
+                                            continue;
+                                        }
+                                        info!("Precommit from {}: epoch={}, height={}, hash={}..., voter={}",
+                                            peer_id, epoch, checkpoint_height, &checkpoint_hash[..16.min(checkpoint_hash.len())], voter_id);
+                                    }
+
+                                    NetworkMessage::FinalityCert { epoch, checkpoint_height, checkpoint_hash, agg_sig_bls, bitmap, set_hash } => {
+                                        if !self.peer_manager.lock().unwrap().check_vote_rate_limit(&peer_id) {
+                                            warn!("Peer {} exceeded vote rate limit. Ignoring FinalityCert.", peer_id);
+                                            continue;
+                                        }
+                                        info!("FinalityCert from {}: epoch={}, height={}, hash={}...",
+                                            peer_id, epoch, checkpoint_height, &checkpoint_hash[..16.min(checkpoint_hash.len())]);
+
+                                        let cert = crate::consensus::finality::FinalityCert {
+                                            epoch,
+                                            checkpoint_height,
+                                            checkpoint_hash,
+                                            agg_sig_bls,
+                                            bitmap,
+                                            set_hash,
+                                        };
+
+                                        let mut chain = self.blockchain.lock().unwrap();
+                                        if let Err(e) = chain.handle_finality_cert(cert) {
+                                            warn!("Failed to apply FinalityCert from {}: {}", peer_id, e);
+                                            self.peer_manager.lock().unwrap().report_bad_behavior(&peer_id);
+                                        } else {
+                                            self.peer_manager.lock().unwrap().report_good_behavior(&peer_id);
+                                        }
+                                    }
+
+                                    NetworkMessage::GetQcBlob { epoch, checkpoint_height } => {
+                                        if !self.peer_manager.lock().unwrap().check_rate_limit(&peer_id) {
+                                            continue;
+                                        }
+                                        info!("GetQcBlob from {}: epoch={}, height={}", peer_id, epoch, checkpoint_height);
+
+                                        let storage = self.blockchain.lock().unwrap().storage.clone();
+                                        if let Some(store) = storage {
+                                            if let Ok(Some(blob)) = store.get_qc_blob(checkpoint_height) {
+                                                let response = NetworkMessage::QcBlobResponse {
+                                                    epoch: blob.epoch,
+                                                    checkpoint_height: blob.checkpoint_height,
+                                                    checkpoint_hash: blob.checkpoint_hash.clone(),
+                                                    blob_data: serde_json::to_vec(&blob).unwrap_or_default(),
+                                                    found: true,
+                                                };
+                                                let topic = gossipsub::IdentTopic::new("blocks");
+                                                let _ = self.swarm.behaviour_mut().gossipsub.publish(topic, response.to_bytes());
+                                            } else {
+                                                let response = NetworkMessage::QcBlobResponse {
+                                                    epoch,
+                                                    checkpoint_height,
+                                                    checkpoint_hash: String::new(),
+                                                    blob_data: Vec::new(),
+                                                    found: false,
+                                                };
+                                                let topic = gossipsub::IdentTopic::new("blocks");
+                                                let _ = self.swarm.behaviour_mut().gossipsub.publish(topic, response.to_bytes());
+                                            }
+                                        }
+                                    }
+
+                                    NetworkMessage::QcBlobResponse { epoch, checkpoint_height, found, .. } => {
+                                        if !self.peer_manager.lock().unwrap().check_blob_rate_limit(&peer_id) {
+                                            warn!("Peer {} exceeded blob rate limit. Ignoring QcBlobResponse.", peer_id);
+                                            continue;
+                                        }
+                                        info!("QcBlobResponse from {}: epoch={}, height={}, found={}",
+                                            peer_id, epoch, checkpoint_height, found);
+
+                                        if found {
+                                            self.peer_manager.lock().unwrap().report_good_behavior(&peer_id);
+                                        }
                                     }
                                 }
                                 }
