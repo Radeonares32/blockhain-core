@@ -92,7 +92,10 @@ impl Blockchain {
         );
 
         for block in chain_vec.iter().skip(start_index) {
-            state.apply_block(&block.transactions, block.producer.as_deref());
+            if let Err(e) = state.apply_block(&block.transactions, block.producer.as_deref()) {
+                println!("CRITICAL: Failed to apply block {} during init: {}. Corrupted database, exiting.", block.index, e);
+                std::process::exit(1);
+            }
         }
 
         Blockchain {
@@ -169,7 +172,10 @@ impl Blockchain {
         block.producer = Some(producer_address.clone());
 
         let mut state_for_root = self.state.clone();
-        state_for_root.apply_block(&block.transactions, block.producer.as_deref());
+        if let Err(e) = state_for_root.apply_block(&block.transactions, block.producer.as_deref()) {
+            println!("Failed to apply block inside produce_block (state for root): {}", e);
+            return;
+        }
         block.state_root = state_for_root.calculate_state_root();
 
         if let Err(e) = self.consensus.prepare_block(&mut block, &self.state) {
@@ -185,7 +191,10 @@ impl Blockchain {
             let _ = store.save_canonical_height(block.index);
         }
 
-        self.state.apply_block(&block.transactions, block.producer.as_deref());
+        if let Err(e) = self.state.apply_block(&block.transactions, block.producer.as_deref()) {
+            println!("Failed to apply block to canonical state: {}", e);
+            return;
+        }
 
         if block.index > 0 && block.index % EPOCH_LENGTH == 0 {
             self.state.advance_epoch(block.timestamp);
@@ -263,6 +272,11 @@ impl Blockchain {
 
         let mut temp_state = self.state.clone();
         for (i, tx) in block.transactions.iter().enumerate() {
+            if tx.chain_id != block.chain_id {
+                return Err(format!(
+                    "Invalid transaction at index {}: Chain ID mismatch. Expected {}, got {}", i, block.chain_id, tx.chain_id
+                ));
+            }
             if block.index > 0 && tx.from == "genesis" {
                 return Err(format!(
                     "Invalid transaction at index {}: 'genesis' transactions only allowed in genesis block", i
@@ -279,7 +293,9 @@ impl Blockchain {
         }
 
         let mut commit_state = self.state.clone();
-        commit_state.apply_block(&block.transactions, block.producer.as_deref());
+        if let Err(e) = commit_state.apply_block(&block.transactions, block.producer.as_deref()) {
+            return Err(format!("Failed to apply block: {}", e));
+        }
 
         if block.index > 0 {
             let computed_root = commit_state.calculate_state_root();
@@ -469,7 +485,9 @@ impl Blockchain {
     fn rebuild_state(chain: &[Block]) -> Result<AccountState, String> {
         let mut state = AccountState::new();
         for block in chain.iter() {
-            state.apply_block(&block.transactions, block.producer.as_deref());
+            if let Err(e) = state.apply_block(&block.transactions, block.producer.as_deref()) {
+                return Err(format!("Failed to rebuild state at block {}: {}", block.index, e));
+            }
         }
         Ok(state)
     }

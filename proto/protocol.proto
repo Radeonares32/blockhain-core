@@ -57,7 +57,6 @@ message ProtoBlock {
     uint64 nonce = 6;
     string producer = 7;
     bytes signature = 8;
-    bytes stake_proof = 9;
     uint64 chain_id = 10;
     repeated ProtoSlashingEvidence slashing_evidence = 11;
     string state_root = 12;

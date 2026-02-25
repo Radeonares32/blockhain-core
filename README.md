@@ -111,10 +111,12 @@ The Budlum blockchain has undergone massive security sweeping and optimization p
 - **Token-Bucket Rate Limiting**: The Peer Manager assigns a burst capacity and message refill rate to every connected node, strictly dropping messages and punishing peers that attempt to flood or DDOS the network.
 - **Snap-Sync Acceleration**: Nodes syncing from behind request historical data using chunked bulk queries (`GetBlocksByHeight`).
 - **RANDAO-Style Leader Selection (PoS)**: Removed deterministic `previous_hash` dependencies across epochs. The generator now derives epoch freshness seeds using XOR collision (`Sha3(epoch_seed \|\| slot)`). It makes leader elections extremely resistant to single-block bias and network manipulation.
-- **Strict Network Isolation**: Nodes executing handshakes enforce `chain_id` checks immediately. Peers with mismatches are instantly banned from communicating to drop cross-chain pollution.
+- **Strict Network Isolation & Handshake Gating**: Nodes executing handshakes enforce `chain_id` checks immediately. Furthermore, the networking layer explicitly drops un-handshaked packets (i.e., unsolicited block or transaction floods) before allocation.
 - **Genesis Spoofing Ban**: Any transaction arriving into the mempool, or network block >0 proposing a transaction acting as `from: "genesis"`, is strictly rejected prior to propagation.
-- **Universal Transaction Validation**: Signatures are evaluated at every touchpoint before advancing into execution arrays.
-- **Deterministic Serialization**: Migrated from `serde_json` to `bincode` for state root hashing and slashing evidence to guarantee deterministic byte mappings. Integrated `prost`-based Protobuf schemas for all P2P network payloads, cleanly separating codegen variants from core Rust models.
+- **Universal Transaction Validation**: Signatures are evaluated at every touchpoint before advancing into execution arrays. The block processing loop mandates intrinsic `tx.chain_id == block.chain_id` verifications.
+- **Strict State Determinism**: Account block applications (`apply_block`) execute in a rigid boundary, actively propagating nested transaction failures to reject the entire network block payload. Node startups will intentionally execute a secure "hard crash" exit upon intercepting disk-level state corruption.
+- **Deterministic Serialization**: Migrated from `serde_json` to `bincode` for state root hashing and block slashing evidence to guarantee deterministic byte mappings matching `BlockHeader` hashes. Integrated `prost`-based Protobuf schemas for all P2P payloads.
+- **Panic Vector Eradication**: Mutex locks spanning heavy traffic surfaces (`Arc<Mutex<Blockchain>>` and `PeerManager`) are routed through graceful `.unwrap_or_else` boundaries to terminate connections instead of propagating poisoned lock panics across the async runtime.
 - **Background Maintenance Workers**: Features automated background asynchronous loops ticking via `tokio::time::interval`, running Mempool Garbage Collection (TTL-based expiration), Peer Manager expired ban cleanup, and continuous Kademlia DHT peer discovery (bootstrap loops) to ensure memory health.
 - **Automated Disk Pruning**: Nodes evaluate snapshot policies continuously. After a state snapshot is securely written to disk, `sled::Db` purges stale block data existing beneath the maximum reorg safety margin to permanently prevent SSD exhaustion over long node uptimes.
 
@@ -132,7 +134,7 @@ A block contains a header and a body of transactions.
 - **`hash`**: SHA3-256 hash of the block content.
 - **`previous_hash`**: Link to the parent block.
 - **`producer`**: Ed25519 Public Key of the node that created the block.
-- **`signature`**: Ed25519 Signature of the block hash by the producer.
+- **`signature`**: Ed25519 Signature of the block hash by the producer. (Placebo `stake_proof` implementations were purged to enforce pure intrinsic signature validation).
 - **`chain_id`**: Network identifier to prevent cross-chain replay.
 - **`transactions`**: A vector of `Transaction` objects.
 
@@ -203,10 +205,11 @@ GenesisConfig {
 
 Budlum uses the **libp2p** stack to ensure robust, decentralized peer-to-peer communication.
 
-#### Sync Protocol
-Headers-first synchronization for efficient chain sync:
-- `BlocksByHeight` (Snap-Sync): Rapid batch delivery mechanisms matching chain height.
-- `NewTip`: Tip gossip for new block announcements.
+#### Sync Protocol & Reorg Orchestration
+Headers-first synchronization for efficient chain sync and fork-resolution:
+- `GetHeaders` / `Headers`: Multi-step exponential locators calculate accurate fork-points.
+- `BlocksRange`: Rapid batch delivery mechanisms matching chain height.
+- `try_reorg()`: Evaluates cumulative difficulty and automates local chain truncations to adopt the heaviest canonical chain without node freezes.
 - `GetStateSnapshot` / `SnapshotChunk`: State snapshot sync.
 
 #### Protocol Messages

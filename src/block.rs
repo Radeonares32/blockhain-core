@@ -90,7 +90,6 @@ pub struct Block {
     pub nonce: u64,
     pub producer: Option<String>,
     pub signature: Option<Vec<u8>>,
-    pub stake_proof: Option<Vec<u8>>,
     pub chain_id: u64,
     pub slashing_evidence: Option<Vec<SlashingEvidence>>,
     pub state_root: String,
@@ -122,7 +121,6 @@ impl Block {
             nonce: 0,
             producer: None,
             signature: None,
-            stake_proof: None,
             chain_id,
             slashing_evidence: None,
             state_root: String::new(),
@@ -172,7 +170,7 @@ impl Block {
         let evidence_bytes = self
             .slashing_evidence
             .as_ref()
-            .map(|e| serde_json::to_vec(e).unwrap_or_default())
+            .map(|e| bincode::serialize(e).unwrap_or_default())
             .unwrap_or_default();
 
         hash_fields(&[
@@ -247,9 +245,6 @@ impl Block {
             return false;
         }
         self.verify_signature()
-    }
-    pub fn add_stake_proof(&mut self, proof: Vec<u8>) {
-        self.stake_proof = Some(proof);
     }
     pub fn mine(&mut self, difficulty: usize) {
         let target = "0".repeat(difficulty);

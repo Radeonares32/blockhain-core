@@ -21,6 +21,7 @@ pub struct PeerScore {
     pub last_seen: Option<Instant>,
     pub rate_tokens: f64,
     pub rate_last_refill: Instant,
+    pub handshaked: bool,
 }
 impl Default for PeerScore {
     fn default() -> Self {
@@ -33,6 +34,7 @@ impl Default for PeerScore {
             last_seen: None,
             rate_tokens: MAX_MSG_BURST,
             rate_last_refill: Instant::now(),
+            handshaked: false,
         }
     }
 }
@@ -142,6 +144,13 @@ impl PeerManager {
     }
     pub fn get_score(&self, peer_id: &PeerId) -> i32 {
         self.peers.get(peer_id).map(|s| s.score).unwrap_or(0)
+    }
+    pub fn is_handshaked(&self, peer_id: &PeerId) -> bool {
+        self.peers.get(peer_id).map(|s| s.handshaked).unwrap_or(false)
+    }
+    pub fn set_handshaked(&mut self, peer_id: &PeerId, status: bool) {
+        let score = self.get_or_create(peer_id);
+        score.handshaked = status;
     }
     pub fn get_peer_info(&self, peer_id: &PeerId) -> Option<&PeerScore> {
         self.peers.get(peer_id)

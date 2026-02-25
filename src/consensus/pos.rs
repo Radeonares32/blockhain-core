@@ -286,7 +286,6 @@ impl ConsensusEngine for PoSEngine {
                     if keypair.public_key_hex() == *pubkey {
                         block.sign(keypair);
 
-                        block.add_stake_proof(block.signature.clone().unwrap_or_default());
                         println!(
                             " PoS: Block {} signed by selected validator {}",
                             block.index,
@@ -358,23 +357,6 @@ impl ConsensusEngine for PoSEngine {
             if !block.verify_signature() {
                 return Err(ConsensusError("Invalid block signature".into()));
             }
-
-            match &block.stake_proof {
-                Some(proof) => {
-                    if let Some(sig) = &block.signature {
-                        if proof != sig {
-                            return Err(ConsensusError(
-                                "Stake proof does not match signature".into(),
-                            ));
-                        }
-                    }
-                }
-                None => {
-                    return Err(ConsensusError("Missing stake proof".into()));
-                }
-            }
-
-            
             
             if let Some(evidences) = &block.slashing_evidence {
                 for (i, evidence) in evidences.iter().enumerate() {

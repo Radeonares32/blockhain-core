@@ -390,15 +390,18 @@ impl AccountState {
 
         Ok(())
     }
-    pub fn apply_block(&mut self, transactions: &[Transaction], block_producer: Option<&str>) {
+    pub fn apply_block(
+        &mut self,
+        transactions: &[Transaction],
+        block_producer: Option<&str>,
+    ) -> Result<(), String> {
         let mut total_fees: u64 = 0;
         for tx in transactions {
             if tx.from == "genesis" {
                 continue;
             }
             if let Err(e) = self.apply_transaction(tx) {
-                println!("TX apply failed: {}", e);
-                continue;
+                return Err(format!("TX apply failed: {}", e));
             }
             total_fees += tx.fee;
         }
@@ -413,6 +416,7 @@ impl AccountState {
                 );
             }
         }
+        Ok(())
     }
     pub fn add_balance(&mut self, public_key: &str, amount: u64) {
         let account = self.get_or_create(public_key);

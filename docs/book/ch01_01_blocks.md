@@ -57,7 +57,6 @@ pub struct Block {
     // ... Header alanlarının aynısı (index, timestamp, vb.) ...
     pub transactions: Vec<Transaction>,
     pub signature: Option<Vec<u8>>,
-    pub stake_proof: Option<Vec<u8>>,
 }
 ```
 
@@ -67,7 +66,6 @@ pub struct Block {
 | :--- | :--- | :--- |
 | `transactions` | `Vec<Transaction>` | **İşlem Listesi.** Para transferleri, kontrat çağrıları vb. Bloğun "yükü" (payload) burasıdır. Diskte yer kaplayan asıl kısım budur. |
 | `signature` | `Option<Vec<u8>>` | **Üretici İmzası.** `producer` alanındaki kişinin bu bloğu gerçekten onayladığını kanıtlayan Ed25519 imzası. Olmazsa, herkes başkasının adına blok üretebilirdi. |
-| `stake_proof` | `Option<Vec<u8>>` | **Hisse Kanıtı (PoS).** Validatörün o slot (zaman dilimi) için seçildiğini kanıtlayan VRF benzeri kriptografik kanıt. |
 
 ---
 
@@ -82,7 +80,10 @@ pub fn calculate_hash(&self) -> String {
     // 1. Önce opsiyonel alanları byte dizisine çevir (Serialization)
     let producer_bytes = self.producer.as_ref().map(...).unwrap_or_default();
     
-    // 2. hash_fields fonksiyonuna tüm verileri sırayla besle
+    // 2. slashing_evidence için bincode kullanarak deterministik serileştirme yap
+    let evidence_bytes = self.slashing_evidence.as_ref().map(|e| bincode::serialize(e).unwrap_or_default()).unwrap_or_default();
+    
+    // 3. hash_fields fonksiyonuna tüm verileri sırayla besle
     hash_fields(&[
         b"BDLM_BLOCK_V2",              // <--- Domain Separation Tag
         &self.index.to_le_bytes(),     // Sayıları byte'a çevir (Little Endian)
@@ -97,8 +98,9 @@ pub fn calculate_hash(&self) -> String {
 
 **Neden Böyle Yazdık?**
 1.  **Domain Separation (`b"BDLM_BLOCK_V2"`):** Bu sabit metin (magic bytes), farklı veri tiplerinin (Transaction ve Block) hashlerinin karışmasını engeller. Eğer bir işlem verisi tesadüfen bir blok verisine benzerse, hashleri aynı çıkmaz çünkü blok hashlerken başına bu etiketi ekliyoruz. Bu profesyonel bir güvenlik standardıdır.
-2.  **Little Endian (`to_le_bytes`):** Farklı işlemci mimarilerinde (Intel vs ARM) sayıların bellekte tutulma sırası farklıdır. Ağda herkesin aynı hash'i bulması için sayıları standart bir formata (Little Endian) zorlarız.
-3.  **Tüm Alanlar:** Hash'e *her şeyi* dahil ederiz (nonce, timestamp, rootlar). Böylece bloktaki en ufak bir virgül değişse, hash tamamen değişir (Avalanche Effect).
+2.  **Deterministik Serileştirme (`bincode`):** Özellikle `slashing_evidence` gibi karmaşık liste yapılarını baytlara çevirirken, `serde_json` gibi veri sıralamasını değiştirebilecek formatlar yerine doğrudan makine dostu `bincode` kullanılarak network split (hash uyuşmazlığı) sorunları engellenir.
+3.  **Little Endian (`to_le_bytes`):** Farklı işlemci mimarilerinde (Intel vs ARM) sayıların bellekte tutulma sırası farklıdır. Ağda herkesin aynı hash'i bulması için sayıları standart bir formata (Little Endian) zorlarız.
+4.  **Tüm Alanlar:** Hash'e *her şeyi* dahil ederiz (nonce, timestamp, rootlar). Böylece bloktaki en ufak bir virgül değişse, hash tamamen değişir (Avalanche Effect).
 
 ---
 

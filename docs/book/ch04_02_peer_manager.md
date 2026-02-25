@@ -21,11 +21,13 @@ pub struct PeerScore {
     pub rate_tokens: f64,          // Kalan mesaj hakkı (Token Bucket)
     pub rate_last_refill: Instant, // Jetonların (Token) son yenilenme zamanı
     pub last_seen: Option<Instant>,// Son görülme
+    pub handshaked: bool,          // Versiyon/Protokol doğrulaması yapıldı mı?
 }
 ```
 
 **Analiz:**
 -   `score` (`i32`): Negatif olabileceği için `i32` kullanıldı. Başlangıç puanı 0'dır (Nötr).
+-   `handshaked` (`bool`): **Handshake Gating** (Kapı Tutucu) mantığıdır. Bu değer `true` olmadan eşin attığı işlem veya blok paketleri açılmadan çöpe atılır (DoS Koruması).
 -   `banned_until`: `Option` tipindedir. Eğer `None` ise yasaklı değil demektir. Eğer zaman damgası varsa ve o tarih gelecekteyse, o eşten gelen her şey **çöpe atılır** (Drop).
 -   `rate_tokens` & `rate_last_refill`: "Token-Bucket" algoritmasının ana değişkenleri. Her bir peer'ın belirli bir mesaj kotası (örn. saniyede 5) vardır.
 

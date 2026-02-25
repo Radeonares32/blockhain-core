@@ -137,7 +137,6 @@ impl From<&Block> for pb::ProtoBlock {
             nonce: block.nonce,
             producer: block.producer.clone().unwrap_or_default(),
             signature: block.signature.clone().unwrap_or_default(),
-            stake_proof: block.stake_proof.clone().unwrap_or_default(),
             chain_id: block.chain_id,
             slashing_evidence: block.slashing_evidence.as_ref().unwrap_or(&vec![]).iter().map(pb::ProtoSlashingEvidence::from).collect(),
             state_root: block.state_root.clone(),
@@ -152,7 +151,6 @@ impl TryFrom<pb::ProtoBlock> for Block {
         let timestamp = proto.timestamp.parse::<u128>().map_err(|e| format!("Invalid block timestamp string: {}", e))?;
         let producer = if proto.producer.is_empty() { None } else { Some(proto.producer) };
         let signature = if proto.signature.is_empty() { None } else { Some(proto.signature) };
-        let stake_proof = if proto.stake_proof.is_empty() { None } else { Some(proto.stake_proof) };
         
         let mut evidence = Vec::new();
         for ev in proto.slashing_evidence {
@@ -174,7 +172,6 @@ impl TryFrom<pb::ProtoBlock> for Block {
             nonce: proto.nonce,
             producer,
             signature,
-            stake_proof,
             chain_id: proto.chain_id,
             slashing_evidence,
             state_root: proto.state_root,

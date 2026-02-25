@@ -65,7 +65,6 @@ impl GenesisConfig {
             nonce: 0,
             producer: None,
             signature: None,
-            stake_proof: None,
             chain_id: self.chain_id,
             slashing_evidence: None,
             state_root: String::new(),
